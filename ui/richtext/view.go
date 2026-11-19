@@ -187,9 +187,13 @@ type view struct {
 	// cursor is the pointer's shape where it hovers: an arrow over task
 	// boxes and the scroll bar, a hand over links, an I-beam over text.
 	cursor    ui.Cursor
-	thumb     bool
-	inView    bool // the pointer is over the editor, which shows the scroll bar
-	thumbGrab float32
+	thumb                bool
+	inView               bool // the pointer is over the editor, which shows the scroll bar
+	alwaysShowScrollbars bool
+	scrollbarClickJumps  bool
+	tpLatched            bool
+	tpMomentumLatched    bool
+	thumbGrab            float32
 	// barStyle is how the scroll bar looks, the theme's as of the last
 	// paint.
 	barStyle   ui.ScrollbarStyle
@@ -289,6 +293,9 @@ func build(c *ui.Context, doc *Document, options []EditorOptions, styled bool) u
 	v.setLook(t, styled)
 	v.sync()
 	v.inView = e.Hovered()
+	prefs := c.Preferences()
+	v.alwaysShowScrollbars = prefs.AlwaysShowScrollbars
+	v.scrollbarClickJumps = prefs.ScrollbarClickJumps
 	focused := e.Focused()
 	if focused != v.focused {
 		v.focused = focused

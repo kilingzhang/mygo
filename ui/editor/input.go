@@ -437,15 +437,60 @@ func (ed *editor) pointerMove(ev ui.InputEvent) bool {
 
 func (ed *editor) wheel(ev ui.InputEvent) bool {
 	ed.hover.close()
+	dx, dy := ev.DX, ev.DY
+	if ev.Precise {
+		switch {
+		case ev.Momentum || ev.MomentumPhase != ui.ScrollPhaseNone:
+			if ev.MomentumPhase == ui.ScrollPhaseEnded || ev.MomentumPhase == ui.ScrollPhaseCanceled {
+				was := ed.tpMomentumLatched
+				ed.tpMomentumLatched = false
+				return was
+			}
+			if !ed.tpMomentumLatched && (dx == 0 && dy == 0) {
+				return false
+			}
+		case ev.Phase == ui.ScrollPhaseMayBegin:
+			ed.tpMomentumLatched = false
+			return false
+		case ev.Phase == ui.ScrollPhaseBegan:
+			ed.tpLatched = false
+			ed.tpMomentumLatched = false
+			if dx == 0 && dy == 0 {
+				return false
+			}
+		case ev.Phase == ui.ScrollPhaseEnded || ev.Phase == ui.ScrollPhaseCanceled:
+			was := ed.tpLatched
+			ed.tpLatched = false
+			ed.tpMomentumLatched = was
+			if dx == 0 && dy == 0 {
+				return was
+			}
+		}
+	}
+	// Suppress tiny orthogonal finger jitter during vertical or horizontal trackpad swipes.
+	if dx != 0 && dy != 0 && !ed.o.fitContent && !ed.view.wrap {
+		ax, ay := dx, dy
+		if ax < 0 {
+			ax = -ax
+		}
+		if ay < 0 {
+			ay = -ay
+		}
+		if ay > ax*1.25 {
+			dx = 0
+		} else if ax > ay*1.25 {
+			dy = 0
+		}
+	}
 	moved := false
-	if ev.DY != 0 && !ed.o.fitContent {
+	if dy != 0 && !ed.o.fitContent {
 		before := ed.scrollY
-		ed.setScrollShared(ed.scrollY + float64(ev.DY))
+		ed.setScrollShared(ed.scrollY + float64(dy))
 		moved = ed.scrollY != before
 	}
-	if ev.DX != 0 && !ed.view.wrap {
+	if dx != 0 && !ed.view.wrap {
 		before := ed.scrollX
-		ed.scrollX = max(0, min(ed.scrollX+ev.DX, ed.maxScrollX()))
+		ed.scrollX = max(0, min(ed.scrollX+dx, ed.maxScrollX()))
 		if s := ed.o.sharedScroll; s != nil {
 			s.setX(ed.scrollX)
 		}
@@ -454,6 +499,23 @@ func (ed *editor) wheel(ev ui.InputEvent) bool {
 	if moved && ed.gesture.active {
 		cx, cy := ed.toContent(ed.pointer.X, ed.pointer.Y)
 		ed.extendGesture(ed.offsetAt(cx, cy))
+	}
+	if ev.Precise {
+		if ev.Momentum || ev.MomentumPhase != ui.ScrollPhaseNone {
+			if moved {
+				ed.tpMomentumLatched = true
+			}
+			return moved || ed.tpMomentumLatched
+		}
+		if ev.Phase == ui.ScrollPhaseBegan || ev.Phase == ui.ScrollPhaseChanged {
+			if moved {
+				ed.tpLatched = true
+			}
+			return moved || ed.tpLatched
+		}
+		if ev.Phase == ui.ScrollPhaseEnded || ev.Phase == ui.ScrollPhaseCanceled {
+			return moved || ed.tpMomentumLatched
+		}
 	}
 	return moved
 }
@@ -506,20 +568,40 @@ func (ed *editor) maxScrollX() float32 {
 	return max(0, ed.contentWidth()+ed.view.charWidth*4-(ed.r.W-ed.textX))
 }
 
-// scrollbarPress grabs a thumb, or jumps to where the track was pressed.
+// scrollbarPress grabs a thumb, or pages / jumps to where the track was pressed
+// according to the system's ScrollbarClickJumps preference (Option toggles).
 func (ed *editor) scrollbarPress(ev ui.InputEvent, horizontal bool) bool {
 	t0, n := ed.bar(horizontal).Thumb()
 	pos := ev.Y
 	if horizontal {
 		pos = ev.X
 	}
-	ed.scrollbar = scrollbarDrag{active: true, horizontal: horizontal}
 	if pos >= t0 && pos <= t0+n {
-		ed.scrollbar.grab = pos - t0
-	} else {
-		ed.scrollbar.grab = n / 2
-		ed.dragScrollbar(ev)
+		ed.scrollbar = scrollbarDrag{active: true, horizontal: horizontal, grab: pos - t0}
+		return true
 	}
+	jumpToSpot := ed.scrollbarClickJumps != (ev.Mods&ui.Alt != 0)
+	if jumpToSpot {
+		ed.scrollbar = scrollbarDrag{active: true, horizontal: horizontal, grab: n / 2}
+		ed.dragScrollbar(ev)
+		return true
+	}
+	if horizontal {
+		step := float32(ed.r.W-ed.textX) * 0.9
+		if pos < t0 {
+			step = -step
+		}
+		ed.scrollX = max(0, min(ed.scrollX+step, ed.maxScrollX()))
+		if s := ed.o.sharedScroll; s != nil {
+			s.setX(ed.scrollX)
+		}
+		return true
+	}
+	step := float64(ed.viewH) * 0.9
+	if pos < t0 {
+		step = -step
+	}
+	ed.setScrollShared(ed.scrollY + step)
 	return true
 }
 

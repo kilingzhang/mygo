@@ -16,14 +16,18 @@ const (
 )
 
 type trackpadScroll struct {
-	gestureActive bool
-	fingersDown   bool
-	targetID      uint64
-	caughtID      uint64
-	momentumID    uint64
-	momentumAt    time.Time
-	vx, vy        float32
-	absorbAxis    uint8 // bit 0 = X, bit 1 = Y
+	gestureActive   bool
+	fingersDown     bool
+	momentumStopped bool
+	targetID        uint64
+	caughtID        uint64
+	momentumID      uint64
+	momentumAt      time.Time
+	vx, vy          float32
+	absorbAxis      uint8 // bit 0 = X, bit 1 = Y
+	axisLock        uint8 // 0 = undecided, 1 = X, 2 = Y, 3 = free (both)
+	lockSumX        float32
+	lockSumY        float32
 
 	bouncing []uint64
 	bounceAt time.Time
@@ -277,8 +281,10 @@ func canTrackpadOverscroll(s *state, fx, fy float32) bool {
 
 func (tp *trackpadScroll) mayBegin(rt *engine, chain []uint64) {
 	tp.momentumID = 0
+	tp.momentumStopped = true
 	tp.absorbAxis = 0
 	tp.caughtID = 0
+	tp.axisLock, tp.lockSumX, tp.lockSumY = 0, 0, 0
 	for _, id := range chain {
 		s := rt.states[id]
 		if s != nil && (s.over[0] != 0 || s.over[1] != 0 || slices.Contains(tp.bouncing, id)) {
@@ -436,7 +442,12 @@ func (tp *trackpadScroll) applyMomentum(rt *engine, s *state, fx, fy float32, no
 	dt := float32(now.Sub(tp.momentumAt).Seconds())
 	tp.momentumAt = now
 	if dt <= 0 || dt > 0.05 {
-		dt = 1.0 / 120.0
+		// Use a conservative 60Hz frame interval when timestamps coincide
+		// (e.g., first momentum event right after ScrollPhaseEnded) so boundary
+		// bounce velocity isn't doubled on 60Hz displays.
+		dt = 1.0 / 60.0
+	} else if dt < 1.0/240.0 {
+		dt = 1.0 / 240.0
 	}
 	if tp.absorbAxis&(1<<0) != 0 {
 		fx = 0
@@ -504,6 +515,46 @@ func (tp *trackpadScroll) applyMomentum(rt *engine, s *state, fx, fy float32, no
 	return moved
 }
 
+// lockAxes applies gentle dominant-axis hysteresis on two-axis (ScrollBoth)
+// containers so cleanly vertical or horizontal trackpad swipes do not wobble
+// sideways, matching macOS NSScrollView directional locking.
+func (tp *trackpadScroll) lockAxes(s *state, sx, sy float32) (fx, fy float32) {
+	hasX := s.flags&flagScrollX != 0
+	hasY := s.flags&flagScrollY != 0
+	if hasX {
+		fx = sx
+	}
+	if hasY {
+		fy = sy
+	}
+	if !hasX || !hasY {
+		return fx, fy
+	}
+	switch tp.axisLock {
+	case 1:
+		return fx, 0
+	case 2:
+		return 0, fy
+	case 3:
+		return fx, fy
+	}
+	tp.lockSumX += abs32(fx)
+	tp.lockSumY += abs32(fy)
+	if tp.lockSumX+tp.lockSumY >= 6 {
+		switch {
+		case tp.lockSumY > tp.lockSumX*2.0:
+			tp.axisLock = 2
+			return 0, fy
+		case tp.lockSumX > tp.lockSumY*2.0:
+			tp.axisLock = 1
+			return fx, 0
+		default:
+			tp.axisLock = 3
+		}
+	}
+	return fx, fy
+}
+
 // handle attempts to process phased touchpad and latched momentum scroll events.
 // It returns handled=true when the phased gesture machinery owned the event.
 func (tp *trackpadScroll) handle(rt *engine, chain []uint64, dx, dy float32, sideways, precise, momentum bool, phase, momentumPhase ScrollPhase) bool {
@@ -515,12 +566,19 @@ func (tp *trackpadScroll) handle(rt *engine, chain []uint64, dx, dy float32, sid
 		switch momentumPhase {
 		case ScrollPhaseEnded, ScrollPhaseCanceled:
 			tp.momentumID = 0
+			tp.momentumStopped = false
 			tp.absorbAxis = 0
 			tp.vx, tp.vy = 0, 0
 			return true
 		case ScrollPhaseBegan:
+			if tp.momentumStopped {
+				return true
+			}
 			tp.momentumAt = now
 			tp.vx, tp.vy = 0, 0
+		}
+		if tp.momentumStopped {
+			return true
 		}
 		if tp.momentumID == 0 {
 			tp.momentumID = tp.pickTarget(rt, chain, dx, dy, sideways)
@@ -531,13 +589,7 @@ func (tp *trackpadScroll) handle(rt *engine, chain []uint64, dx, dy float32, sid
 			if sideways && s.rtl {
 				sx = -sx
 			}
-			var fx, fy float32
-			if s.flags&flagScrollX != 0 {
-				fx = sx
-			}
-			if s.flags&flagScrollY != 0 {
-				fy = sy
-			}
+			fx, fy := tp.lockAxes(s, sx, sy)
 			tp.applyMomentum(rt, s, fx, fy, now)
 		}
 		return true
@@ -549,8 +601,10 @@ func (tp *trackpadScroll) handle(rt *engine, chain []uint64, dx, dy float32, sid
 		return true
 	case ScrollPhaseBegan:
 		tp.momentumID = 0
+		tp.momentumStopped = true
 		tp.absorbAxis = 0
 		tp.vx, tp.vy = 0, 0
+		tp.axisLock, tp.lockSumX, tp.lockSumY = 0, 0, 0
 		tp.gestureActive = true
 		tp.fingersDown = true
 		tp.targetID = 0
@@ -563,7 +617,9 @@ func (tp *trackpadScroll) handle(rt *engine, chain []uint64, dx, dy float32, sid
 	case ScrollPhaseChanged:
 		if !tp.gestureActive {
 			tp.momentumID = 0
+			tp.momentumStopped = true
 			tp.absorbAxis = 0
+			tp.axisLock, tp.lockSumX, tp.lockSumY = 0, 0, 0
 			tp.gestureActive = true
 			tp.fingersDown = true
 			tp.targetID = 0
@@ -574,6 +630,7 @@ func (tp *trackpadScroll) handle(rt *engine, chain []uint64, dx, dy float32, sid
 	case ScrollPhaseEnded, ScrollPhaseCanceled:
 		tp.fingersDown = false
 		tp.gestureActive = false
+		tp.momentumStopped = false
 		target := rt.states[tp.targetID]
 		if target == nil && tp.caughtID != 0 {
 			target = rt.states[tp.caughtID]
@@ -583,13 +640,7 @@ func (tp *trackpadScroll) handle(rt *engine, chain []uint64, dx, dy float32, sid
 			if sideways && target.rtl {
 				sx = -sx
 			}
-			var fx, fy float32
-			if target.flags&flagScrollX != 0 {
-				fx = sx
-			}
-			if target.flags&flagScrollY != 0 {
-				fy = sy
-			}
+			fx, fy := tp.lockAxes(target, sx, sy)
 			tp.applyFingerPan(rt, target, fx, fy)
 		}
 		if target != nil {
@@ -621,13 +672,7 @@ func (tp *trackpadScroll) handle(rt *engine, chain []uint64, dx, dy float32, sid
 		if sideways && s.rtl {
 			sx = -sx
 		}
-		var fx, fy float32
-		if s.flags&flagScrollX != 0 {
-			fx = sx
-		}
-		if s.flags&flagScrollY != 0 {
-			fy = sy
-		}
+		fx, fy := tp.lockAxes(s, sx, sy)
 		tp.applyFingerPan(rt, s, fx, fy)
 	}
 	return true

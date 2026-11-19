@@ -54,8 +54,55 @@ func (v *view) input(ev ui.InputEvent) bool {
 		v.reveal = true
 		return true
 	case ui.InputScroll:
+		if ev.Precise {
+			switch {
+			case ev.Momentum || ev.MomentumPhase != ui.ScrollPhaseNone:
+				if ev.MomentumPhase == ui.ScrollPhaseEnded || ev.MomentumPhase == ui.ScrollPhaseCanceled {
+					was := v.tpMomentumLatched
+					v.tpMomentumLatched = false
+					return was
+				}
+				if !v.tpMomentumLatched && ev.DY == 0 {
+					return false
+				}
+			case ev.Phase == ui.ScrollPhaseMayBegin:
+				v.tpMomentumLatched = false
+				return false
+			case ev.Phase == ui.ScrollPhaseBegan:
+				v.tpLatched = false
+				v.tpMomentumLatched = false
+				if ev.DY == 0 {
+					return false
+				}
+			case ev.Phase == ui.ScrollPhaseEnded || ev.Phase == ui.ScrollPhaseCanceled:
+				was := v.tpLatched
+				v.tpLatched = false
+				v.tpMomentumLatched = was
+				if ev.DY == 0 {
+					return was
+				}
+			}
+		}
 		// At an end, the wheel goes on to the containers around.
-		return v.scrollTo(v.scroll + float64(ev.DY))
+		moved := v.scrollTo(v.scroll + float64(ev.DY))
+		if ev.Precise {
+			if ev.Momentum || ev.MomentumPhase != ui.ScrollPhaseNone {
+				if moved {
+					v.tpMomentumLatched = true
+				}
+				return moved || v.tpMomentumLatched
+			}
+			if ev.Phase == ui.ScrollPhaseBegan || ev.Phase == ui.ScrollPhaseChanged {
+				if moved {
+					v.tpLatched = true
+				}
+				return moved || v.tpLatched
+			}
+			if ev.Phase == ui.ScrollPhaseEnded || ev.Phase == ui.ScrollPhaseCanceled {
+				return moved || v.tpMomentumLatched
+			}
+		}
+		return moved
 	}
 	return false
 }
@@ -582,13 +629,20 @@ func (v *view) press(ev ui.InputEvent) bool {
 	v.pressMods = ev.Mods
 	v.pressLink = ""
 	if v.overScrollbar(ev.X) {
-		v.thumb = true
 		top, size := v.thumbBox()
 		if ev.Y >= top && ev.Y < top+size {
+			v.thumb = true
 			v.thumbGrab = ev.Y - top
-		} else {
+		} else if v.scrollbarClickJumps != (ev.Mods&ui.Alt != 0) {
+			v.thumb = true
 			v.thumbGrab = size / 2
 			v.dragThumb(ev.Y)
+		} else {
+			step := float64(v.viewH) * 0.9
+			if ev.Y < top {
+				step = -step
+			}
+			v.scrollTo(v.scroll + step)
 		}
 		return true
 	}

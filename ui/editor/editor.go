@@ -211,9 +211,13 @@ type editor struct {
 	// link is the word under the pointer that Cmd+click would go to the
 	// definition of, which shows as a link while Cmd is held; none when
 	// its ends are equal.
-	link       [2]int
-	scrollbar  scrollbarDrag
-	frameNow   time.Time
+	link                 [2]int
+	scrollbar            scrollbarDrag
+	alwaysShowScrollbars bool
+	scrollbarClickJumps  bool
+	tpLatched            bool
+	tpMomentumLatched    bool
+	frameNow             time.Time
 	needsBuild bool
 	// stale tells that an edit found the buffer edited since the editor
 	// followed it, for its command to run again (retry).

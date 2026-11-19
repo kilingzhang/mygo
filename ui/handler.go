@@ -82,6 +82,16 @@ const (
 	ScrollPhaseCanceled = platform.ScrollPhaseCanceled
 )
 
+// ScrollDirection reports whether an InputScroll event follows natural
+// (content-tracks-finger) or traditional scrolling when known.
+type ScrollDirection = platform.ScrollDirection
+
+const (
+	ScrollDirectionUnknown     = platform.ScrollDirectionUnknown
+	ScrollDirectionNatural     = platform.ScrollDirectionNatural
+	ScrollDirectionTraditional = platform.ScrollDirectionTraditional
+)
+
 // InputEvent is input an element takes as it comes (HandleInput).
 type InputEvent struct {
 	Kind InputKind
@@ -130,9 +140,11 @@ type InputEvent struct {
 	Pressure float32
 	// DX and DY are what InputScroll scrolls by, in local axes; positive DY moves the view
 	// down the content. Phase and MomentumPhase report touchpad gesture boundaries when known.
+	// ScrollDirection reports natural vs traditional scroll direction when known.
 	DX, DY               float32
 	Precise, Momentum    bool
 	Phase, MomentumPhase ScrollPhase
+	ScrollDirection      ScrollDirection
 	// Scale is what InputZoom zooms by, and Rotation the radians clockwise
 	// two fingers turned, on touch screens.
 	Scale, Rotation float32

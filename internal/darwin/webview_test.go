@@ -57,7 +57,7 @@ func TestEmbeddedWebViewScrollReachesSurface(t *testing.T) {
 			t.Fatalf("surface scroll events = %d, want 1", len(h.events))
 		}
 		got := h.events[0]
-		if got.Kind != platform.PointerScroll || got.DX != -40 || got.DY != 80 || got.Precise {
+		if got.Kind != platform.PointerScroll || got.DX != -20 || got.DY != 40 || got.Precise || got.ScrollDirection != platform.ScrollDirectionTraditional {
 			t.Fatalf("surface scroll = %+v, want line-scaled pointer deltas", got)
 		}
 		var createScroll func(uintptr, uint32, uint32, int32, int32) uintptr
@@ -69,7 +69,7 @@ func TestEmbeddedWebViewScrollReachesSurface(t *testing.T) {
 			t.Fatalf("surface trackpad events = %d, want 2", len(h.events))
 		}
 		got = h.events[1]
-		if got.Kind != platform.PointerScroll || got.DX != 0 || got.DY != -3 || !got.Precise {
+		if got.Kind != platform.PointerScroll || got.DX != 0 || got.DY != -3 || !got.Precise || got.ScrollDirection != platform.ScrollDirectionTraditional {
 			t.Fatalf("surface trackpad scroll = %+v, want precise pointer deltas", got)
 		}
 		w.opts.ScrollToContainer = false

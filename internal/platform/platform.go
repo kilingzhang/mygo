@@ -1362,6 +1362,15 @@ type Preferences struct {
 	// touch screen, and NoAnyHover that none can (hover and any-hover:
 	// none).
 	NoHover, NoAnyHover bool
+	// AlwaysShowScrollbars tells that the system keeps scroll bars visible
+	// even when idle (e.g. macOS NSScrollerStyleLegacy / "Show scroll bars: Always").
+	AlwaysShowScrollbars bool
+	// ScrollbarClickJumps tells that clicking a scrollbar track jumps directly
+	// to the clicked spot rather than paging (e.g. macOS AppleScrollerPagingBehavior).
+	ScrollbarClickJumps bool
+	// DisableScrollAnimation tells that the system turned off smooth wheel
+	// scroll animation (e.g. macOS AppleScrollAnimationEnabled = false).
+	DisableScrollAnimation bool
 }
 
 // PointerAccuracy is how accurately a pointing device points.

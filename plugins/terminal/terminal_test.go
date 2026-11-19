@@ -322,11 +322,20 @@ func TestScrollbarDrag(t *testing.T) {
 	if !shows(15) {
 		t.Error("the bar didn't show with the pointer back")
 	}
-	// A press low on the track brings the thumb there.
+	// With default paging behavior, a press low on the track pages forward.
+	beforePage := offset()
+	tt.Press(395, 190)
+	tt.Release(395, 190)
+	if got := offset(); got <= beforePage || got >= bottom/2 {
+		t.Errorf("after a paged press low on the track, offset = %d, want between %d and %d", got, beforePage, bottom/2)
+	}
+	// With ScrollbarClickJumps enabled, a press low on the track brings the thumb there.
+	tt.SetPreferences(ui.Preferences{ScrollbarClickJumps: true})
+	tt.Frame()
 	tt.Press(395, 190)
 	tt.Release(395, 190)
 	if got := offset(); got < bottom/2 {
-		t.Errorf("after a press low on the track, offset = %d, want past %d", got, bottom/2)
+		t.Errorf("after a jump-to-spot press low on the track, offset = %d, want past %d", got, bottom/2)
 	}
 	// A full-screen program's screen has no scrollback, and no bar.
 	term.Feed([]byte("\x1b[?1049h"))
@@ -2161,6 +2170,8 @@ func hostNotch() float32 {
 		return 3 * 33 // 3 lines to scroll, 33 DIPs a line
 	case "linux":
 		return 50
+	case "darwin":
+		return 20
 	}
 	return 40
 }
@@ -2180,8 +2191,8 @@ func TestWheelRows(t *testing.T) {
 		{"windows", 33, 1},   // a notch at 1 line
 		{"windows", 66, 2},   // two notches at 1 line, or one at 2
 		{"windows", 165, 5},  // a notch at 5 lines
-		{"darwin", 40, 3},
-		{"darwin", -80, -6}, // a line accelerated to two
+		{"darwin", 20, 3},
+		{"darwin", -40, -6}, // a line accelerated to two
 		{"linux", 50, 3},
 		{"linux", -50, -3},
 	} {
@@ -2253,13 +2264,13 @@ func TestScrollMultiplierRows(t *testing.T) {
 		goos    string
 		want    float32
 	}{
-		{ScrollMultiplier{}, 40, false, "darwin", 3},
+		{ScrollMultiplier{}, 20, false, "darwin", 3},
 		{ScrollMultiplier{}, 20, true, "darwin", 1},
-		{ScrollMultiplier{Discrete: 1.5}, 40, false, "darwin", 1.5},
+		{ScrollMultiplier{Discrete: 1.5}, 20, false, "darwin", 1.5},
 		{ScrollMultiplier{Discrete: 1}, 50, false, "linux", 1},
 		{ScrollMultiplier{Discrete: 6}, 165, false, "windows", 10}, // a notch at 5 lines, doubled
 		{ScrollMultiplier{Precision: 0.5}, 40, true, "darwin", 1},
-		{ScrollMultiplier{Precision: 2}, 40, false, "darwin", 3}, // a wheel's alone
+		{ScrollMultiplier{Precision: 2}, 20, false, "darwin", 3}, // a wheel's alone
 	} {
 		if got := c.m.rows(c.dy, 20, c.precise, c.goos); got != c.want {
 			t.Errorf("%+v.rows(%v, precise %v, %q) = %v, want %v", c.m, c.dy, c.precise, c.goos, got, c.want)

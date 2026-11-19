@@ -343,6 +343,20 @@ func (theme) UIFont() string { return "" }
 
 func (theme) FontRendering() platform.FontRendering { return platform.FontRendering{} }
 
+func readDarwinScrollPrefs() (alwaysShow, clickJumps, disableAnim bool) {
+	// NSScrollerStyleLegacy == 0 (Always or mouse attached under Automatic),
+	// NSScrollerStyleOverlay == 1 (When scrolling).
+	alwaysShow = sendInt(class("NSScroller"), "preferredScrollerStyle") == 0
+	defaults := send(class("NSUserDefaults"), "standardUserDefaults")
+	if defaults != 0 {
+		clickJumps = sendBool(defaults, "boolForKey:", uintptr(nsString("AppleScrollerPagingBehavior")))
+		if obj := send(defaults, "objectForKey:", uintptr(nsString("AppleScrollAnimationEnabled"))); obj != 0 {
+			disableAnim = !sendBool(obj, "boolValue")
+		}
+	}
+	return alwaysShow, clickJumps, disableAnim
+}
+
 // Preferences reads the accent color and the display settings of
 // accessibility.
 func (t theme) Preferences() platform.Preferences {
@@ -352,6 +366,11 @@ func (t theme) Preferences() platform.Preferences {
 		p.ReduceMotion = sendBool(ws, "accessibilityDisplayShouldReduceMotion")
 		p.ReduceTransparency = sendBool(ws, "accessibilityDisplayShouldReduceTransparency")
 		p.HighContrast = sendBool(ws, "accessibilityDisplayShouldIncreaseContrast")
+		p.AlwaysShowScrollbars, p.ScrollbarClickJumps, p.DisableScrollAnimation = readDarwinScrollPrefs()
+		if t.b != nil {
+			t.b.lastScrollPrefs = [3]bool{p.AlwaysShowScrollbars, p.ScrollbarClickJumps, p.DisableScrollAnimation}
+			t.b.scrollPrefsKnown = true
+		}
 		// The accent, as the app's appearance draws it.
 		var c id
 		appearance := class("NSAppearance")

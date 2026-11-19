@@ -566,7 +566,8 @@ func (t *Tester) SetPreferences(p Preferences) {
 func platformPreferences(p Preferences) platform.Preferences {
 	return platform.Preferences{Accent: platform.Color{R: p.Accent.R, G: p.Accent.G, B: p.Accent.B, A: p.Accent.A}, ReduceMotion: p.ReduceMotion,
 		ReduceTransparency: p.ReduceTransparency, HighContrast: p.HighContrast, TextScale: float64(p.TextScale),
-		Pointer: platform.PointerAccuracy(p.Pointer), AnyPointer: platform.PointerAccuracy(p.AnyPointer), NoHover: p.NoHover, NoAnyHover: p.NoAnyHover}
+		Pointer: platform.PointerAccuracy(p.Pointer), AnyPointer: platform.PointerAccuracy(p.AnyPointer), NoHover: p.NoHover, NoAnyHover: p.NoAnyHover,
+		AlwaysShowScrollbars: p.AlwaysShowScrollbars, ScrollbarClickJumps: p.ScrollbarClickJumps, DisableScrollAnimation: p.DisableScrollAnimation}
 }
 
 // SetLocale makes tag the language the app shows, as mygo.App.SetLocale
@@ -1008,16 +1009,23 @@ func (t *Tester) Scroll(x, y, dx, dy float32) {
 
 // ScrollPhase delivers a phased touchpad scroll or momentum event at (x, y).
 func (t *Tester) ScrollPhase(x, y, dx, dy float32, phase, momentumPhase ScrollPhase) {
+	t.ScrollPhaseDirection(x, y, dx, dy, phase, momentumPhase, ScrollDirectionUnknown)
+}
+
+// ScrollPhaseDirection delivers a phased touchpad scroll or momentum event at
+// (x, y) with an explicit ScrollDirection (Natural or Traditional).
+func (t *Tester) ScrollPhaseDirection(x, y, dx, dy float32, phase, momentumPhase ScrollPhase, dir ScrollDirection) {
 	t.send(platform.SurfaceEvent{
-		Kind:          platform.PointerScroll,
-		X:             float64(x),
-		Y:             float64(y),
-		DX:            float64(dx),
-		DY:            float64(dy),
-		Precise:       true,
-		Momentum:      momentumPhase != ScrollPhaseNone,
-		Phase:         phase,
-		MomentumPhase: momentumPhase,
+		Kind:            platform.PointerScroll,
+		X:               float64(x),
+		Y:               float64(y),
+		DX:              float64(dx),
+		DY:              float64(dy),
+		Precise:         true,
+		Momentum:        momentumPhase != ScrollPhaseNone,
+		Phase:           phase,
+		MomentumPhase:   momentumPhase,
+		ScrollDirection: dir,
 	})
 }
 

@@ -213,7 +213,8 @@ type view struct {
 	// barGrab DIPs below the thumb's top; overBar that the pointer is over
 	// the bar, as of its last move, and barHover as of the last build;
 	// inView that the pointer was over the terminal, which shows the bar.
-	barHeld, overBar, barHover, inView bool
+	barHeld, overBar, barHover, inView        bool
+	alwaysShowScrollbars, scrollbarClickJumps bool
 	// barStyle is how the scroll bar looks, the theme's as of the last
 	// paint.
 	barStyle ui.ScrollbarStyle
@@ -319,6 +320,9 @@ func (v *view) build(c *ui.Context, e ui.Element) {
 		}
 		v.pointerAt = v.pointerShape(t.term, c.Modifiers())
 		v.inView = e.Hovered()
+		prefs := c.Preferences()
+		v.alwaysShowScrollbars = prefs.AlwaysShowScrollbars
+		v.scrollbarClickJumps = prefs.ScrollbarClickJumps
 		v.barHover = v.inView && v.overScrollbar(v.pointer[0], v.pointer[1])
 		if v.barHover || v.barHeld {
 			v.pointerAt = ui.CursorDefault // the bar's, not the text's
@@ -1303,15 +1307,26 @@ func (v *view) scrollbarEvent(ev ui.InputEvent) bool {
 	case v.barHeld:
 		v.dragScrollbar(ev.Y)
 	case v.overBar && ev.Kind == ui.InputPointerDown && ev.Button == 0:
-		b := bar(v.t.term.Scrollbar(), ui.Rect{H: v.size[1]})
+		sb := v.t.term.Scrollbar()
+		b := bar(sb, ui.Rect{H: v.size[1]})
 		b.Style = v.barStyle
 		y, h := b.Thumb()
-		v.barGrab = h / 2
 		if ev.Y >= y && ev.Y < y+h {
 			v.barGrab = ev.Y - y
+			v.barHeld = true
+			v.dragScrollbar(ev.Y)
+		} else if v.scrollbarClickJumps != (ev.Mods&ui.Alt != 0) {
+			v.barGrab = h / 2
+			v.barHeld = true
+			v.dragScrollbar(ev.Y)
+		} else {
+			page := max(1, int(sb.Len)-1)
+			if ev.Y < y {
+				page = -page
+			}
+			v.t.term.ScrollBy(page)
+			v.services.Invalidate()
 		}
-		v.barHeld = true
-		v.dragScrollbar(ev.Y)
 	default:
 		return false
 	}
@@ -1489,6 +1504,8 @@ func wheelRows(dy float32, goos string) float32 {
 		return dy / 33
 	case "linux":
 		return dy / 50 * 3
+	case "darwin":
+		return dy / 20 * 3
 	}
 	return dy / 40 * 3
 }

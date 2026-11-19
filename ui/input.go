@@ -135,7 +135,7 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		}
 	case platform.PointerScroll:
 		rt.pointerMove(x, y)
-		rt.scroll(float32(ev.DX), float32(ev.DY), Modifiers(ev.Mods), ev.Precise, ev.Momentum, ev.Phase, ev.MomentumPhase)
+		rt.scroll(float32(ev.DX), float32(ev.DY), Modifiers(ev.Mods), ev.Precise, ev.Momentum, ev.Phase, ev.MomentumPhase, ev.ScrollDirection)
 	case platform.PointerZoom:
 		rt.pointerMove(x, y)
 		rt.zoom(float32(ev.Scale), float32(ev.Rotation), Modifiers(ev.Mods))
@@ -903,7 +903,7 @@ func (s *state) quietClick(mods Modifiers) {
 	s.click(mods)
 }
 
-func (rt *engine) scroll(dx, dy float32, mods Modifiers, precise, momentum bool, phase, momentumPhase ScrollPhase) {
+func (rt *engine) scroll(dx, dy float32, mods Modifiers, precise, momentum bool, phase, momentumPhase ScrollPhase, scrollDir ScrollDirection) {
 	chain := rt.appendHitChain(rt.chain[:0], rt.pointerX, rt.pointerY)
 	rt.chain = chain[:0]
 	// From the innermost element out, the first handling its input to
@@ -913,14 +913,15 @@ func (rt *engine) scroll(dx, dy float32, mods Modifiers, precise, momentum bool,
 	// only when no handler takes it, so a handler around one, as a canvas
 	// that zooms with Ctrl and the wheel, still sees it first.
 	ev := InputEvent{
-		Kind:          InputScroll,
-		DX:            dx,
-		DY:            dy,
-		Mods:          mods,
-		Precise:       precise,
-		Momentum:      momentum,
-		Phase:         phase,
-		MomentumPhase: momentumPhase,
+		Kind:            InputScroll,
+		DX:              dx,
+		DY:              dy,
+		Mods:            mods,
+		Precise:         precise,
+		Momentum:        momentum,
+		Phase:           phase,
+		MomentumPhase:   momentumPhase,
+		ScrollDirection: scrollDir,
 	}
 	for _, id := range chain {
 		if s := rt.states[id]; s != nil && s.input != nil && s.flags&flagDisabled == 0 && rt.deliver(s, ev) {
@@ -937,9 +938,10 @@ func (rt *engine) scroll(dx, dy float32, mods Modifiers, precise, momentum bool,
 		return
 	}
 	hasX, hasY := rt.chainScrollAxes(chain)
-	// A wheel's notches glide, as browsers scroll them; a touchpad's
-	// small moves already follow the fingers.
-	glide := !precise && !rt.preferences().ReduceMotion
+	// A wheel's notches glide unless the user disabled motion or smooth scroll;
+	// a touchpad's small moves already follow the fingers.
+	prefs := rt.preferences()
+	glide := !precise && !prefs.ReduceMotion && !prefs.DisableScrollAnimation
 	for _, id := range chain {
 		s := rt.states[id]
 		if s == nil {
@@ -2205,11 +2207,30 @@ func (rt *engine) scrollbarPress(chain []uint64, x, y float32) bool {
 		tpResetOver(s)
 		rt.trackpad.clearBounce(s.id)
 		s.haltSnap()
+		jumpToSpot := rt.preferences().ScrollbarClickJumps != (rt.mods&Alt != 0)
+		trackPad := float32(2)
+		if s.barStyle != nil && s.barStyle.Flush {
+			trackPad = 0
+		}
 		switch {
 		case g.vertical && g.vTrack.Contains(lx, ly):
 			switch {
 			case ly >= g.v.Y && ly < g.v.Y+g.v.H:
 				d.st, d.start, d.from, d.horizontal = s, ly, s.scrollY, false
+				if s.track != nil {
+					s.track.glide = nil
+				}
+				d.contentW, d.contentH = s.contentW, s.contentH
+			case jumpToSpot:
+				travel := g.vTrack.H - 2*trackPad - g.v.H
+				reach := max(0, s.contentH-h)
+				targetY := s.scrollY
+				if travel > 0 && reach > 0 {
+					along := float64(ly-(g.vTrack.Y+trackPad+g.v.H/2)) / float64(travel)
+					targetY = max(0, min(along, 1)) * reach
+				}
+				s.scrollTo(s.scrollX, targetY)
+				d.st, d.start, d.from, d.horizontal = s, ly, targetY, false
 				if s.track != nil {
 					s.track.glide = nil
 				}
@@ -2232,6 +2253,23 @@ func (rt *engine) scrollbarPress(chain []uint64, x, y float32) bool {
 			switch {
 			case lx >= g.h.X && lx < g.h.X+g.h.W:
 				d.st, d.start, d.from, d.horizontal = s, lx, s.scrollX, true
+				if s.track != nil {
+					s.track.glide = nil
+				}
+				d.contentW, d.contentH = s.contentW, s.contentH
+			case jumpToSpot:
+				travel := g.hTrack.W - 2*trackPad - g.h.W
+				reach := max(0, s.contentW-w)
+				targetX := s.scrollX
+				if travel > 0 && reach > 0 {
+					along := float64(lx-(g.hTrack.X+trackPad+g.h.W/2)) / float64(travel)
+					if s.rtl {
+						along = 1 - along
+					}
+					targetX = max(0, min(along, 1)) * reach
+				}
+				s.scrollTo(targetX, s.scrollY)
+				d.st, d.start, d.from, d.horizontal = s, lx, targetX, true
 				if s.track != nil {
 					s.track.glide = nil
 				}

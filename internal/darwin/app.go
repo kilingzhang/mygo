@@ -70,6 +70,11 @@ type Backend struct {
 	// dockMenu is returned by applicationDockMenu: (retained).
 	dockMenu      id
 	dockMenuOwner int
+
+	// lastScrollPrefs tracks macOS scroller/scroll-animation defaults so
+	// applicationDidBecomeActive can publish preference updates only when changed.
+	lastScrollPrefs  [3]bool
+	scrollPrefsKnown bool
 }
 
 // New creates the macOS backend.
@@ -156,9 +161,11 @@ func (b *Backend) Init(h platform.AppHandler, opts platform.AppOptions) error {
 	center := send(class("NSNotificationCenter"), "defaultCenter")
 	send(center, "addObserver:selector:name:object:", uintptr(b.delegate), uintptr(sel("screensChanged:")),
 		uintptr(nsString("NSApplicationDidChangeScreenParametersNotification")), 0)
-	// The accent color, and the display settings of accessibility.
+	// The accent color, scroller style, and the display settings of accessibility.
 	send(center, "addObserver:selector:name:object:", uintptr(b.delegate), uintptr(sel("preferencesChanged:")),
 		uintptr(nsString("NSSystemColorsDidChangeNotification")), 0)
+	send(center, "addObserver:selector:name:object:", uintptr(b.delegate), uintptr(sel("preferencesChanged:")),
+		uintptr(nsString("NSPreferredScrollerStyleDidChangeNotification")), 0)
 	send(send(workspace(), "notificationCenter"), "addObserver:selector:name:object:", uintptr(b.delegate), uintptr(sel("preferencesChanged:")),
 		uintptr(nsString("NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification")), 0)
 	// The languages and regional formats of the user: Foundation tells of
@@ -354,6 +361,12 @@ func registerAppDelegate() {
 			return true
 		}),
 		method("applicationDidBecomeActive:", func(self id, _ objc.SEL, n id) {
+			a, j, d := readDarwinScrollPrefs()
+			cur := [3]bool{a, j, d}
+			if theBackend.scrollPrefsKnown && cur != theBackend.lastScrollPrefs {
+				theBackend.lastScrollPrefs = cur
+				theBackend.h.ThemeChanged()
+			}
 			theBackend.h.DidBecomeActive()
 		}),
 		method("applicationDidResignActive:", func(self id, _ objc.SEL, n id) {

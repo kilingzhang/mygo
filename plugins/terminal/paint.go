@@ -1010,7 +1010,7 @@ func (v *view) drawPreedit(p *ui.Painter, ox, oy, cw, ch, base float32) {
 // the terminal or drags the thumb; in the terminal's text color, as its
 // colors are its own.
 func (v *view) drawScrollbar(p *ui.Painter, r ui.Rect) {
-	if !v.inView && !v.barHeld {
+	if !v.inView && !v.barHeld && !v.alwaysShowScrollbars {
 		return
 	}
 	b := bar(v.scrollbar, r)

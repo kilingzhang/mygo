@@ -1514,14 +1514,15 @@ func (p *Painter) scrollbars(e *node) {
 	// (scrollbarPress). Kept, they show as on hover, so that the pointer
 	// coming over changes nothing.
 	hide, keep := st.barFlags == 0, st.barFlags&keepBarsVisible != 0
-	if !hide && !keep {
+	alwaysShow := rt.preferences().AlwaysShowScrollbars
+	if !hide && !keep && !alwaysShow {
 		// The bars show on hover (hoverNeeds).
 		st.hoverLook = true
 	}
 	// A finger is no pointer hovering, on it or after it, however it ended: only
 	// a mouse or a trackpad, as on a tablet, shows them by being over them.
 	hovered = hovered && !rt.lastPointerTouch
-	st.barsShown = !hide && (keep || hovered || dragging)
+	st.barsShown = !hide && (keep || alwaysShow || hovered || dragging)
 	style := *st.barStyle
 	fade := float32(1)
 	if !st.barsShown {

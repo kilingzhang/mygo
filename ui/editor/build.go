@@ -30,6 +30,9 @@ func View(c *ui.Context, st *State) ui.Element {
 func (ed *editor) build(c *ui.Context, buf *Buffer, o options) ui.Element {
 	ed.view.sys = c.TextSystem()
 	ed.texts = l10n.In(c.Locale())
+	prefs := c.Preferences()
+	ed.alwaysShowScrollbars = prefs.AlwaysShowScrollbars
+	ed.scrollbarClickJumps = prefs.ScrollbarClickJumps
 	ed.init(buf, o, c.Theme())
 	ed.services = c.Services()
 	ed.builtViewH = ed.viewH

@@ -868,21 +868,28 @@ func scrollWheel(s *surface, ev id) {
 	phase := darwinScrollPhase(sendInt(ev, "phase"))
 	momentumPhase := darwinScrollPhase(sendInt(ev, "momentumPhase"))
 	momentum := momentumPhase != platform.ScrollPhaseNone
+	dir := platform.ScrollDirectionTraditional
+	if sendBool(ev, "isDirectionInvertedFromDevice") {
+		dir = platform.ScrollDirectionNatural
+	}
 	if !precise {
-		// A mouse wheel scrolls by lines: 40 DIPs, as in browsers.
-		dx, dy = dx*40, dy*40
+		// Non-precise mouse wheel deltas are in lines; multiply by a standard
+		// macOS line height (20 DIPs) instead of browser 40px so wheel speed
+		// matches native AppKit scroll views under macOS HID acceleration.
+		dx, dy = dx*20, dy*20
 	}
 	s.send(platform.SurfaceEvent{
-		Kind:          platform.PointerScroll,
-		X:             x,
-		Y:             y,
-		DX:            -dx,
-		DY:            -dy,
-		Precise:       precise,
-		Momentum:      momentum,
-		Phase:         phase,
-		MomentumPhase: momentumPhase,
-		Mods:          eventMods(ev),
+		Kind:            platform.PointerScroll,
+		X:               x,
+		Y:               y,
+		DX:              -dx,
+		DY:              -dy,
+		Precise:         precise,
+		Momentum:        momentum,
+		Phase:           phase,
+		MomentumPhase:   momentumPhase,
+		ScrollDirection: dir,
+		Mods:            eventMods(ev),
 	})
 }
 

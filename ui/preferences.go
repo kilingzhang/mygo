@@ -41,6 +41,15 @@ type Preferences struct {
 	// the opposite. Tooltips and what shows on hover alone want a pointer
 	// that hovers.
 	NoHover, NoAnyHover bool
+	// AlwaysShowScrollbars tells that the system keeps scroll bars visible
+	// even when idle (macOS Show scroll bars: Always / legacy scroller style).
+	AlwaysShowScrollbars bool
+	// ScrollbarClickJumps tells that clicking a scrollbar track jumps directly
+	// to the clicked spot rather than paging (macOS AppleScrollerPagingBehavior).
+	ScrollbarClickJumps bool
+	// DisableScrollAnimation tells that the system turned off smooth wheel
+	// scroll animation (macOS AppleScrollAnimationEnabled = false).
+	DisableScrollAnimation bool
 }
 
 // PointerAccuracy is how accurately a pointing device points.
@@ -73,15 +82,18 @@ func (rt *engine) preferences() Preferences {
 	if !rt.prefsKnown {
 		p := rt.host.preferences()
 		rt.prefs = Preferences{
-			Accent:             Color{R: p.Accent.R, G: p.Accent.G, B: p.Accent.B, A: p.Accent.A},
-			ReduceMotion:       p.ReduceMotion,
-			ReduceTransparency: p.ReduceTransparency,
-			HighContrast:       p.HighContrast,
-			TextScale:          float32(p.TextScale),
-			Pointer:            PointerAccuracy(p.Pointer),
-			AnyPointer:         PointerAccuracy(p.AnyPointer),
-			NoHover:            p.NoHover,
-			NoAnyHover:         p.NoAnyHover,
+			Accent:                 Color{R: p.Accent.R, G: p.Accent.G, B: p.Accent.B, A: p.Accent.A},
+			ReduceMotion:           p.ReduceMotion,
+			ReduceTransparency:     p.ReduceTransparency,
+			HighContrast:           p.HighContrast,
+			TextScale:              float32(p.TextScale),
+			Pointer:                PointerAccuracy(p.Pointer),
+			AnyPointer:             PointerAccuracy(p.AnyPointer),
+			NoHover:                p.NoHover,
+			NoAnyHover:             p.NoAnyHover,
+			AlwaysShowScrollbars:   p.AlwaysShowScrollbars,
+			ScrollbarClickJumps:    p.ScrollbarClickJumps,
+			DisableScrollAnimation: p.DisableScrollAnimation,
 		}
 		if rt.prefs.TextScale <= 0 {
 			rt.prefs.TextScale = 1

@@ -595,9 +595,12 @@ type SurfaceEvent struct {
 	// other devices that scroll by pixels rather than by lines. Momentum
 	// marks scrolling that continues after the fingers leave a touchpad.
 	// Phase and MomentumPhase carry OS gesture boundaries (ScrollPhase).
+	// ScrollDirection reports whether DX/DY follow natural or traditional
+	// direction when known (e.g. macOS NSEvent.isDirectionInvertedFromDevice).
 	DX, DY               float64
 	Precise, Momentum    bool
 	Phase, MomentumPhase ScrollPhase
+	ScrollDirection      ScrollDirection
 	// Scale is PointerZoom's, and Rotation the radians clockwise two fingers
 	// turned since the last, on touch screens.
 	Scale, Rotation float64
@@ -667,6 +670,16 @@ const (
 	ScrollPhaseChanged
 	ScrollPhaseEnded
 	ScrollPhaseCanceled
+)
+
+// ScrollDirection reports whether a PointerScroll event's DX and DY follow
+// natural (content-tracks-finger) or traditional scrolling.
+type ScrollDirection uint8
+
+const (
+	ScrollDirectionUnknown ScrollDirection = iota
+	ScrollDirectionNatural
+	ScrollDirectionTraditional
 )
 
 const (

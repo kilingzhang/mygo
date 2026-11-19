@@ -237,3 +237,121 @@ func TestInlineParagraphLayoutReuseAndPaintCull(t *testing.T) {
 		t.Fatalf("expected paragraph with unchanged inline child to reuse layout (layReuse bit), got lay=%v", para.lay)
 	}
 }
+
+func TestSystemScrollPreferencesAlwaysShowClickJumpsAndDisableAnim(t *testing.T) {
+	var s ScrollState
+	var hidden ScrollState
+	var st, hiddenSt *state
+	tt := coreNewTester(func(c *context) {
+		coreRow(c).Fill().Children(func() {
+			sc := coreScroll(c).Size(150, 200).TrackScroll(&s)
+			st = sc.st
+			sc.Children(func() { coreBox(c).Size(150, 2000).Shrink(0) })
+
+			hs := coreScroll(c).Size(150, 200).Scrollbars(false).TrackScroll(&hidden)
+			hiddenSt = hs.st
+			hs.Children(func() { coreBox(c).Size(150, 2000).Shrink(0) })
+		})
+	}, 320, 220)
+	defer tt.rt.close()
+
+	// Move pointer outside both scroll containers.
+	tt.Move(310, 210)
+	tt.Frame()
+	if st.barsShown {
+		t.Fatal("default overlay policy should hide scrollbars when pointer is away")
+	}
+
+	// System preference AlwaysShowScrollbars keeps default scrollbars visible
+	// while still honoring explicit Scrollbars(false).
+	tt.SetPreferences(Preferences{AlwaysShowScrollbars: true, TextScale: 1})
+	tt.Frame()
+	if !st.barsShown {
+		t.Fatal("AlwaysShowScrollbars=true should show scrollbars even when pointer is away")
+	}
+	if hiddenSt.barsShown {
+		t.Fatal("explicit Scrollbars(false) must stay hidden even when AlwaysShowScrollbars=true")
+	}
+
+	// Track click paging (ScrollbarClickJumps=false) moves by ~90% of viewport height.
+	trackX := float32(144)
+	tt.Press(trackX, 170)
+	tt.Release(trackX, 170)
+	tt.Frame()
+	if s.Y < 160 || s.Y > 200 {
+		t.Fatalf("page-jump track click scrolled to %v, want ~180", s.Y)
+	}
+
+	// ScrollbarClickJumps=true jumps directly near the bottom when clicking at y=170.
+	s.Y = 0
+	tt.SetPreferences(Preferences{AlwaysShowScrollbars: true, ScrollbarClickJumps: true, TextScale: 1})
+	tt.Frame()
+	tt.Press(trackX, 170)
+	tt.Release(trackX, 170)
+	tt.Frame()
+	if s.Y < 1200 {
+		t.Fatalf("ScrollbarClickJumps=true track click at y=170 scrolled only to %v, want >= 1200", s.Y)
+	}
+
+	// DisableScrollAnimation=true makes mouse wheel ticks scroll immediately without glide.
+	s.Y = 0
+	tt.SetPreferences(Preferences{DisableScrollAnimation: true, TextScale: 1})
+	tt.Move(50, 100)
+	tt.Wheel(50, 100, 0, 80)
+	if s.Y != 80 {
+		t.Fatalf("DisableScrollAnimation=true should scroll wheel immediately to 80, got %v", s.Y)
+	}
+}
+
+func TestTrackpadMayBeginHaltsTrailingMomentumAndScrollBothAxisLock(t *testing.T) {
+	var both ScrollState
+	tt := coreNewTester(func(c *context) {
+		coreScrollBoth(c).Fill().TrackScroll(&both).Children(func() {
+			coreBox(c).Size(1200, 1200).Shrink(0)
+		})
+	}, 300, 300)
+	defer tt.rt.close()
+
+	// Dominant vertical trackpad gesture on ScrollBoth locks out tiny horizontal jitter.
+	tt.Move(150, 150)
+	sendPhasedScroll(tt, 150, 150, 0.5, 10, platform.ScrollPhaseBegan, platform.ScrollPhaseNone)
+	sendPhasedScroll(tt, 150, 150, 1.0, 20, platform.ScrollPhaseChanged, platform.ScrollPhaseNone)
+	sendPhasedScroll(tt, 150, 150, 1.5, 25, platform.ScrollPhaseChanged, platform.ScrollPhaseNone)
+	tt.Frame()
+	if both.Y < 50 || both.X > 2 {
+		t.Fatalf("vertical gesture on ScrollBoth should lock Y and suppress X jitter: X=%v Y=%v", both.X, both.Y)
+	}
+	sendPhasedScroll(tt, 150, 150, 0, 0, platform.ScrollPhaseEnded, platform.ScrollPhaseNone)
+	sendPhasedScroll(tt, 150, 150, 0, 30, platform.ScrollPhaseNone, platform.ScrollPhaseBegan)
+	tt.Frame()
+	yBeforeStop := both.Y
+	// Touching fingers down (MayBegin) halts coasting; trailing momentum must not resume it.
+	sendPhasedScroll(tt, 150, 150, 0, 0, platform.ScrollPhaseMayBegin, platform.ScrollPhaseNone)
+	sendPhasedScroll(tt, 150, 150, 0, 40, platform.ScrollPhaseNone, platform.ScrollPhaseChanged)
+	tt.Frame()
+	if both.Y != yBeforeStop {
+		t.Fatalf("trailing momentum after MayBegin moved Y from %v to %v", yBeforeStop, both.Y)
+	}
+	sendPhasedScroll(tt, 150, 150, 0, 0, platform.ScrollPhaseNone, platform.ScrollPhaseEnded)
+}
+
+func TestInputScrollDirectionPropagation(t *testing.T) {
+	var got []ScrollDirection
+	tt := coreNewTester(func(c *context) {
+		coreBox(c).Fill().HandleInput(func(ev InputEvent) bool {
+			if ev.Kind == InputScroll {
+				got = append(got, ev.ScrollDirection)
+				return true
+			}
+			return false
+		})
+	}, 200, 200)
+	defer tt.rt.close()
+
+	tt.Move(100, 100)
+	tt.ScrollPhaseDirection(100, 100, 20, 0, ScrollPhaseBegan, ScrollPhaseNone, ScrollDirectionTraditional)
+	tt.ScrollPhaseDirection(100, 100, -20, 0, ScrollPhaseChanged, ScrollPhaseNone, ScrollDirectionNatural)
+	if len(got) != 2 || got[0] != ScrollDirectionTraditional || got[1] != ScrollDirectionNatural {
+		t.Fatalf("got ScrollDirections=%v, want [Traditional Natural]", got)
+	}
+}
