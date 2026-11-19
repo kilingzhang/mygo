@@ -583,6 +583,8 @@ final class Host: NSObject, HostCalls, UNUserNotificationCenterDelegate, UIDocum
 
     func pluginCall(_ c: PluginCallCall) { PluginHost.call(c) }
 
+    func pluginCallSync(_ c: PluginCallSyncCall) -> PluginCallSyncReply { PluginHost.callSync(c) }
+
     // Sound, called on the audio's thread.
     func audioOpen(_ c: AudioOpenCall) -> AudioOpenReply { Sound.shared.open(c) }
     func audioWrite(_ c: AudioWriteCall) -> AudioWriteReply { Sound.shared.write(c) }

@@ -33,7 +33,7 @@ type symbol struct {
 //	sfsymbols.Symbol(c, "trash").Size(20).Color(t.Accent).Weight(sfsymbols.Semibold).Fill()
 //	sfsymbols.Symbol(c, "sparkles").Fallback(sparkles) // an SVG where the system has none
 //
-// Where the system has no symbol of that name, on another OS or a macOS
+// Where the system has no symbol of that name, on another OS or a version of macOS or iOS
 // without it, it draws its Fallback, or nothing, at the same size.
 func Symbol(c *ui.Context, name string) SymbolElement {
 	t := c.Theme()

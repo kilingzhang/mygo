@@ -1,4 +1,4 @@
-// Package sfsymbols draws Apple's SF Symbols, as the running macOS has
+// Package sfsymbols draws Apple's SF Symbols, as the running macOS or iOS has
 // them, for native UI.
 //
 //	sfsymbols.Symbol(c, "gearshape")
@@ -7,10 +7,10 @@
 // Symbol shows one as SwiftUI's Image(systemName:) does; Image gives the
 // bitmap, for drawing with a ui.Painter.
 //
-// The symbols are read from the system: AppKit draws each with its own
+// The symbols are read from the system: AppKit or UIKit draws each with its own
 // design and weight, and the plugin copies the pixels. Nothing of Apple's
 // artwork is in the app or its build. Where the system has no symbol of a
-// name, and on every other OS, Image says so and Symbol draws its
+// name, or the OS does not supply SF Symbols, Image says so and Symbol draws its
 // Fallback instead.
 package sfsymbols
 

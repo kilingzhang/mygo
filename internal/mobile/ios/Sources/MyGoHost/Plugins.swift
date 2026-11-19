@@ -24,11 +24,14 @@ public protocol MyGoPlugin: AnyObject {
     /// Runs a method with its arguments, from JSON, on the main thread. It
     /// may answer later: call reply exactly once, from any thread.
     func call(_ method: String, _ args: [String: Any], _ reply: @escaping PluginReply)
+    /// Returns a bounded calculation immediately on the main thread, without user interaction.
+    func callSync(_ method: String, _ args: [String: Any]) -> Data?
     /// Hears what the app's delegate hears that no plugin can get otherwise.
     func applicationEvent(_ event: ApplicationEvent)
 }
 
 public extension MyGoPlugin {
+    func callSync(_ method: String, _ args: [String: Any]) -> Data? { nil }
     func applicationEvent(_ event: ApplicationEvent) {}
 }
 
@@ -96,6 +99,18 @@ public enum PluginHost {
             return String(decoding: d[1..<(d.count - 1)], as: UTF8.self)
         }
         return "null"
+    }
+
+    static func callSync(_ c: PluginCallSyncCall) -> PluginCallSyncReply {
+        guard let plugin = plugins[c.plugin],
+              let args = try? JSONSerialization.jsonObject(with: Data(c.args.utf8)) as? [String: Any],
+              let data = plugin.callSync(c.method, args) else {
+            return PluginCallSyncReply()
+        }
+        var reply = PluginCallSyncReply()
+        reply.handled = true
+        reply.data = Array(data)
+        return reply
     }
 
     static func call(_ c: PluginCallCall) {

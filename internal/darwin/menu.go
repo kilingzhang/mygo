@@ -382,6 +382,11 @@ func (b *Backend) buildItem(it *platform.MenuItem, owner int, metrics menuMetric
 	return item
 }
 
+const (
+	menuItemImageAutomatic = iota
+	menuItemImageVisible
+)
+
 func applyItemState(item id, it *platform.MenuItem) {
 	if it.Type != platform.MenuItemSeparator {
 		applyItemSubtitle(item, it)
@@ -393,6 +398,14 @@ func applyItemState(item id, it *platform.MenuItem) {
 		}
 		if send(item, "image") != img {
 			send(item, "setImage:", uintptr(img))
+			// macOS 27 may hide images unless the item explicitly opts in.
+			if respondsTo(item, "setPreferredImageVisibility:") {
+				visibility := menuItemImageAutomatic
+				if img != 0 {
+					visibility = menuItemImageVisible
+				}
+				send(item, "setPreferredImageVisibility:", uintptr(visibility))
+			}
 		}
 	}
 	send(item, "setEnabled:", boolArg(it.Enabled))

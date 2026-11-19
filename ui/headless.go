@@ -287,6 +287,15 @@ type Tester struct {
 	pressure float32
 }
 
+// SelectedTexts returns the parts of the selection of the Selectable
+// container scope, as the last frame measured it.
+func (t *Tester) SelectedTexts(scope uint64) []SelectedText {
+	if t == nil || t.rt == nil {
+		return nil
+	}
+	return t.rt.selectedTexts(scope)
+}
+
 // NewTester starts testing view in a window of width×height DIPs. Two
 // elements given one key under one parent make it panic where the second
 // was given, as apps only log it.
@@ -995,6 +1004,21 @@ func (t *Tester) Move(x, y float32) {
 // does: at once.
 func (t *Tester) Scroll(x, y, dx, dy float32) {
 	t.send(platform.SurfaceEvent{Kind: platform.PointerScroll, X: float64(x), Y: float64(y), DX: float64(dx), DY: float64(dy), Precise: true})
+}
+
+// ScrollPhase delivers a phased touchpad scroll or momentum event at (x, y).
+func (t *Tester) ScrollPhase(x, y, dx, dy float32, phase, momentumPhase ScrollPhase) {
+	t.send(platform.SurfaceEvent{
+		Kind:          platform.PointerScroll,
+		X:             float64(x),
+		Y:             float64(y),
+		DX:            float64(dx),
+		DY:            float64(dy),
+		Precise:       true,
+		Momentum:      momentumPhase != ScrollPhaseNone,
+		Phase:         phase,
+		MomentumPhase: momentumPhase,
+	})
 }
 
 // DropFiles drops files dragged from another app at (x, y), as from

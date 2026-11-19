@@ -275,6 +275,27 @@ func (k TextKey) SetText(s string) {
 	}
 }
 
+// Selection returns the anchor and caret rune offsets of the input as the key
+// comes.
+func (k TextKey) Selection() (anchor, caret int) {
+	ed := k.valid()
+	return ed.anchor, ed.caret
+}
+
+// SetSelection sets the anchor and caret rune offsets of the input, clamped to
+// its text, as an atomic inline token steps the caret across its span.
+func (k TextKey) SetSelection(anchor, caret int) {
+	ed := k.valid()
+	n := ed.buf.n
+	anchor, caret = min(max(anchor, 0), n), min(max(caret, 0), n)
+	ed.editorSelection = editorSelection{anchor: anchor, caret: caret}
+	ed.hasDesired = false
+	if w := ed.client; w != nil {
+		w.rt.consumed = true
+		w.rt.requestFrame()
+	}
+}
+
 // Lines makes a text area as high as its text, wrapped at its width, from
 // min lines up to max, past which it scrolls, as a message field grows with
 // what is typed: TextArea(c, &draft).Lines(1, 8). Without it, a text area is
@@ -559,6 +580,9 @@ type SelectedText struct {
 	// selection holds.
 	Text       string
 	Start, End int
+	// Ancestors are the IDs of the elements around the paragraph, nearest
+	// first, up to the Selectable container.
+	Ancestors []uint64
 }
 
 // SelectedTexts returns the parts of the paragraphs that the selection of
@@ -567,6 +591,105 @@ type SelectedText struct {
 // does.
 func (e *node) SelectedTexts() []SelectedText {
 	return e.c.rt.selectedTexts(e.id)
+}
+
+// OnSelectionChange has fn see the parts of the selection of a Selectable
+// container after it changes, on the main thread after layout. fn gets nil
+// when the selection clears or moves to another container. Call Invalidate
+// from fn to rebuild with the new selection, as a toolbar shown beside it
+// does. The selection of a nested Selectable container is its own.
+func (e *node) OnSelectionChange(fn func(parts []SelectedText)) *node {
+	if e == nil {
+		return e
+	}
+	e.selectionFn = fn
+	return e
+}
+
+// SelectionRects returns the window rectangles of the selection of a
+// Selectable container, in build order, as of the last frame. It returns
+// none when the container's selection is empty or moved elsewhere.
+func (e *node) SelectionRects() []Rect {
+	if e == nil || e.c == nil || e.c.rt == nil {
+		return nil
+	}
+	return e.c.rt.selectionRects(e.id)
+}
+
+// SelectionBounds returns the union of SelectionRects, and whether the
+// container has a selection.
+func (e *node) SelectionBounds() (Rect, bool) {
+	if e == nil || e.c == nil || e.c.rt == nil {
+		return Rect{}, false
+	}
+	return e.c.rt.selectionBounds(e.id)
+}
+
+// SelectTextIn selects the first occurrence of text in the paragraphs under
+// root, at or after occurrence, without notifying OnSelectionChange. It
+// returns false when the text is not found. The selection is the container's,
+// so a caller can clear it with ClearSelection.
+func (e *node) SelectTextIn(root uint64, text string, occurrence int) bool {
+	if e == nil || e.c == nil || e.c.rt == nil {
+		return false
+	}
+	return e.c.rt.selectTextIn(e.id, root, text, occurrence)
+}
+
+// ClearSelection clears the selection of the Selectable container.
+func (e *node) ClearSelection() {
+	if e == nil || e.c == nil || e.c.rt == nil {
+		return
+	}
+	e.c.rt.clearTextSelection(e.id)
+}
+
+// ClearSelectionIfText clears the selection of the Selectable container when
+// its selected text is text, leaving another selection alone.
+func (e *node) ClearSelectionIfText(text string) bool {
+	if e == nil || e.c == nil || e.c.rt == nil {
+		return false
+	}
+	return e.c.rt.clearTextSelectionIf(e.id, text)
+}
+
+// SubtreeText returns the text of the selectable paragraphs under root that
+// belong to this Selectable container, joined with newlines in build order, as
+// of the last frame.
+func (e *node) SubtreeText(root uint64) string {
+	if e == nil || e.c == nil || e.c.rt == nil {
+		return ""
+	}
+	return e.c.rt.subtreeText(e.id, root)
+}
+
+// SubtreeSelectionRange returns SubtreeText(root) and the rune offsets of the
+// Selectable container's selection within it, or ok=false when the container
+// has no selection or its selection extends outside root.
+func (e *node) SubtreeSelectionRange(root uint64) (text string, start, end int, ok bool) {
+	if e == nil || e.c == nil || e.c.rt == nil {
+		return "", 0, 0, false
+	}
+	return e.c.rt.subtreeSelectionRange(e.id, root)
+}
+
+// SubtreeRangeRects returns the visible window rectangles of runes start up to
+// end of SubtreeText(root), in build order, without changing the container's
+// selection or focus.
+func (e *node) SubtreeRangeRects(root uint64, start, end int) []Rect {
+	if e == nil || e.c == nil || e.c.rt == nil {
+		return nil
+	}
+	return e.c.rt.subtreeRangeRects(e.id, root, start, end, true)
+}
+
+// SubtreeRangeBounds returns the window bounds of the specified text range,
+// including portions clipped by scrolling, without changing selection or focus.
+func (e *node) SubtreeRangeBounds(root uint64, start, end int) (Rect, bool) {
+	if e == nil || e.c == nil || e.c.rt == nil {
+		return Rect{}, false
+	}
+	return boundsOfRects(e.c.rt.subtreeRangeRects(e.id, root, start, end, false))
 }
 
 // CopyData sets what Copy, its shortcut and the context menu's put on
@@ -598,6 +721,16 @@ type TextRange struct {
 	Start, End int
 	Color      Color
 	Weight     int
+	// Size sets the size of the range's text in DIPs, when positive, as a
+	// composer collapses a hidden token to make room for its chip.
+	Size float32
+	// Hidden paints no glyphs of the range, leaving their advance: a
+	// composer draws a chip over the space instead.
+	Hidden bool
+	// ObjectWidth, when positive, makes the range an inline object of that
+	// width in DIPs in all, standing ObjectHeight on the baseline with
+	// ObjectDescent below it: a composer's chip, instead of the runes.
+	ObjectWidth, ObjectHeight, ObjectDescent float32
 }
 
 // TextRanges styles runs of a text input's text, in the frames that call
@@ -619,6 +752,58 @@ func (e *node) TextRanges(ranges ...TextRange) *node {
 		}
 	}
 	return e
+}
+
+// TextRangeRects returns the window rectangles of runes Start up to End of
+// a text input's text, as of the last frame: a composer draws a chip over a
+// hidden range with them. It returns none for an empty range or a text input
+// that has not laid out.
+func (e *node) TextRangeRects(start, end int) []Rect {
+	ed := e.st.editor
+	if ed == nil {
+		return nil
+	}
+	n := ed.buf.n
+	start, end = min(max(start, 0), n), min(max(end, 0), n)
+	if start >= end {
+		return nil
+	}
+	box := e.contentBox()
+	var out []Rect
+	if ed.area != nil {
+		b := &ed.buf
+		first, last := b.para(start), b.para(end)
+		for p := first; p <= last; p++ {
+			l := ed.area.paraLayout(ed, p)
+			if l == nil {
+				continue
+			}
+			from := ed.area.local(ed, p, max(start, b.start(p)))
+			to := ed.area.local(ed, p, min(end, b.end(p)))
+			if from >= to {
+				continue
+			}
+			y := e.y + ed.originY + float32(ed.area.hs.top(p)-ed.area.scroll)
+			for _, r := range l.SelectionVisual(from, to, false) {
+				rect := intersect(Rect{X: e.x + ed.originX + r.X, Y: y + r.Y, W: r.W, H: r.H}, box)
+				if rect.W > 0 && rect.H > 0 {
+					out = append(out, rect)
+				}
+			}
+		}
+		return out
+	}
+	if ed.layout == nil {
+		return nil
+	}
+	ox, oy := e.x+ed.originX-ed.scrollX, e.y+ed.originY
+	for _, r := range ed.layout.SelectionVisual(start, end, false) {
+		rect := intersect(Rect{X: ox + r.X, Y: oy + r.Y, W: r.W, H: r.H}, box)
+		if rect.W > 0 && rect.H > 0 {
+			out = append(out, rect)
+		}
+	}
+	return out
 }
 
 // rangeMerge is what sortRanges reuses from frame to frame.
@@ -653,7 +838,7 @@ func (ed *editor) sortRanges() {
 		for ; next < len(starts) && given[starts[next]].Start <= from; next++ {
 			i := starts[next]
 			m.all.push(i)
-			if given[i].Color.A > 0 {
+			if given[i].Color.A > 0 || given[i].Hidden || given[i].ObjectWidth > 0 || given[i].Size > 0 {
 				m.colors.push(i)
 			}
 			if given[i].Weight != 0 {
@@ -666,11 +851,21 @@ func (ed *editor) sortRanges() {
 		r := TextRange{Start: from, End: to}
 		if i, ok := m.colors.top(given, from); ok {
 			r.Color = given[i].Color
+			r.Hidden = given[i].Hidden
+			r.Size = given[i].Size
+			r.ObjectWidth = given[i].ObjectWidth
+			r.ObjectHeight = given[i].ObjectHeight
+			r.ObjectDescent = given[i].ObjectDescent
 		}
 		if i, ok := m.weights.top(given, from); ok {
 			r.Weight = given[i].Weight
 		}
-		if n := len(out); n > 0 && out[n-1].End == from && out[n-1].Color == r.Color && out[n-1].Weight == r.Weight {
+		if n := len(out); n > 0 && out[n-1].End == from &&
+			out[n-1].Color == r.Color && out[n-1].Weight == r.Weight &&
+			out[n-1].Hidden == r.Hidden && out[n-1].Size == r.Size &&
+			out[n-1].ObjectWidth == r.ObjectWidth &&
+			out[n-1].ObjectHeight == r.ObjectHeight &&
+			out[n-1].ObjectDescent == r.ObjectDescent {
 			out[n-1].End = to // a run as one, as an attributed string's
 			continue
 		}

@@ -840,6 +840,8 @@ object HostImpl : HostCalls {
 
     override fun pluginCall(c: PluginCallCall) = PluginHost.call(c)
 
+    override fun pluginCallSync(c: PluginCallSyncCall) = PluginCallSyncReply()
+
     // Sound, called on the audio's thread.
     override fun audioOpen(c: AudioOpenCall): AudioOpenReply = Sound.open(c)
     override fun audioWrite(c: AudioWriteCall): AudioWriteReply = Sound.write(c)

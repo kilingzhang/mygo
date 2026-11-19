@@ -104,8 +104,21 @@ func TestMenuBadgeIconColumn(t *testing.T) {
 		defer dropOwner(owner)
 		plain := send(menu, "itemAtIndex:", 0)
 		icon := send(menu, "itemAtIndex:", 1)
+		if send(icon, "image") == 0 {
+			t.Fatal("menu item did not load its image")
+		}
 		if got, want := titleTab(icon), titleTab(plain); got != want {
 			t.Errorf("icon item tab = %v, want %v", got, want)
+		}
+		if respondsTo(icon, "preferredImageVisibility") {
+			if got := sendInt(icon, "preferredImageVisibility"); got != menuItemImageVisible {
+				t.Errorf("image visibility = %d, want visible", got)
+			}
+			m.Items[1].Icon = nil
+			applyItemState(icon, m.Items[1])
+			if got := sendInt(icon, "preferredImageVisibility"); got != menuItemImageAutomatic {
+				t.Errorf("visibility after removing image = %d, want automatic", got)
+			}
 		}
 	})
 }

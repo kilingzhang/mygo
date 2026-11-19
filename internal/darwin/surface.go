@@ -843,16 +843,47 @@ func (s *surface) send(ev platform.SurfaceEvent) bool {
 	return s.w.h.SurfaceEvent(ev)
 }
 
+func darwinScrollPhase(v int) platform.ScrollPhase {
+	// NSEventPhase bitmask: Began=1, Stationary=2, Changed=4, Ended=8, Cancelled=16, MayBegin=32.
+	switch {
+	case v&32 != 0:
+		return platform.ScrollPhaseMayBegin
+	case v&1 != 0:
+		return platform.ScrollPhaseBegan
+	case v&(2|4) != 0:
+		return platform.ScrollPhaseChanged
+	case v&8 != 0:
+		return platform.ScrollPhaseEnded
+	case v&16 != 0:
+		return platform.ScrollPhaseCanceled
+	default:
+		return platform.ScrollPhaseNone
+	}
+}
+
 func scrollWheel(s *surface, ev id) {
 	x, y := s.location(ev)
 	dx, dy := msgFloat(ev, sel("scrollingDeltaX")), msgFloat(ev, sel("scrollingDeltaY"))
 	precise := sendBool(ev, "hasPreciseScrollingDeltas")
-	momentum := sendInt(ev, "momentumPhase") != 0
+	phase := darwinScrollPhase(sendInt(ev, "phase"))
+	momentumPhase := darwinScrollPhase(sendInt(ev, "momentumPhase"))
+	momentum := momentumPhase != platform.ScrollPhaseNone
 	if !precise {
 		// A mouse wheel scrolls by lines: 40 DIPs, as in browsers.
 		dx, dy = dx*40, dy*40
 	}
-	s.send(platform.SurfaceEvent{Kind: platform.PointerScroll, X: x, Y: y, DX: -dx, DY: -dy, Precise: precise, Momentum: momentum, Mods: eventMods(ev)})
+	s.send(platform.SurfaceEvent{
+		Kind:          platform.PointerScroll,
+		X:             x,
+		Y:             y,
+		DX:            -dx,
+		DY:            -dy,
+		Precise:       precise,
+		Momentum:      momentum,
+		Phase:         phase,
+		MomentumPhase: momentumPhase,
+		Mods:          eventMods(ev),
+	})
 }
 
 func eventMods(ev id) platform.Modifiers {

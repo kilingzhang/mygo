@@ -939,6 +939,19 @@ func (rt *engine) longPress(t *touchPan) {
 		t.dragging = true
 		rt.pointerMove(x, y)
 	case s.flags&flagEditable != 0 || s.flags&flagSelectable != 0:
+		if s.flags&flagEditable == 0 {
+			// A custom menu on selectable content takes the hold. Passing
+			// the text through keeps EditItems available in the menu.
+			if menu := rt.touchContextMenu(rt.hitChain(x, y)); menu != nil {
+				rt.cancelPress()
+				t.swallow = true
+				rt.askMenu(menu, x, y, false)
+				if s.editor != nil {
+					rt.menu.text = s.id
+				}
+				return
+			}
+		}
 		// A word chosen, as a double click does.
 		rt.cancelPress()
 		// As the second press of two on it, whatever it was pressed before.
@@ -955,6 +968,23 @@ func (rt *engine) longPress(t *touchPan) {
 		rt.pointerDown(x, y, 1, rt.mods, 1)
 		rt.pointerUp(1, 1, false)
 	}
+}
+
+// touchContextMenu finds the innermost explicit menu on selectable content.
+func (rt *engine) touchContextMenu(chain []uint64) *state {
+	for _, id := range chain {
+		s := rt.states[id]
+		if s == nil || s.flags&flagDisabled != 0 {
+			continue
+		}
+		if s.flags&flagContextMenu != 0 {
+			return s
+		}
+		if s.flags&flagUnselectable != 0 {
+			break
+		}
+	}
+	return nil
 }
 
 // haptic plays a feel of the system's, on a device that has them.

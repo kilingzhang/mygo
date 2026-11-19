@@ -542,6 +542,9 @@ type node struct {
 	takesText  bool
 	noIME      bool // InputMethod(false)
 	copyData   func(parts []SelectedText) transfer.Data
+	// selectionFn sees the selection of a Selectable container change
+	// (OnSelectionChange).
+	selectionFn func(parts []SelectedText)
 
 	// Content.
 	spans    []Span // of a RichText

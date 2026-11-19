@@ -594,9 +594,10 @@ type SurfaceEvent struct {
 	// DX and DY are scroll distances in DIPs; Precise marks touchpads and
 	// other devices that scroll by pixels rather than by lines. Momentum
 	// marks scrolling that continues after the fingers leave a touchpad.
-	DX, DY   float64
-	Precise  bool
-	Momentum bool
+	// Phase and MomentumPhase carry OS gesture boundaries (ScrollPhase).
+	DX, DY               float64
+	Precise, Momentum    bool
+	Phase, MomentumPhase ScrollPhase
 	// Scale is PointerZoom's, and Rotation the radians clockwise two fingers
 	// turned since the last, on touch screens.
 	Scale, Rotation float64
@@ -654,6 +655,19 @@ type SurfaceEvent struct {
 
 // PointerKind is the kind of device of a pointer event.
 type PointerKind uint8
+
+// ScrollPhase tells where a touchpad scroll or momentum sequence is in its
+// gesture lifecycle (may-begin, began, changed, ended, or canceled).
+type ScrollPhase uint8
+
+const (
+	ScrollPhaseNone ScrollPhase = iota
+	ScrollPhaseMayBegin
+	ScrollPhaseBegan
+	ScrollPhaseChanged
+	ScrollPhaseEnded
+	ScrollPhaseCanceled
+)
 
 const (
 	// PointerMouse is a mouse, or a touchpad, which moves the pointer as

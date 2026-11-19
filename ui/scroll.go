@@ -52,6 +52,70 @@ func (s *ScrollState) ScrollTo(x, y float32, a Animation) {
 // Scrolling reports whether a ScrollTo is on its way.
 func (s *ScrollState) Scrolling() bool { return s.glide != nil }
 
+// Active reports whether the tracked scroll container is currently scrolling:
+// either via a programmatic ScrollTo glide, an active mouse-wheel glide, a
+// scrollbar thumb drag, an active trackpad pan/momentum sequence, or an
+// overscroll bounce.
+func (s *ScrollState) Active() bool {
+	if s == nil {
+		return false
+	}
+	if s.glide != nil {
+		return true
+	}
+	if s.Handle.state == nil {
+		return false
+	}
+	for _, b := range s.Handle.state.bindings {
+		if b.closed || b.id == 0 {
+			continue
+		}
+		rt := b.window.runtime()
+		if rt == nil {
+			continue
+		}
+		st := rt.states[b.id]
+		if st == nil {
+			continue
+		}
+		if st.wheel != nil || rt.scrollDrag.st == st || rt.trackpad.isActive(st) {
+			return true
+		}
+	}
+	return false
+}
+
+// CanScrollUnderPointer reports whether any scroll container under the current
+// pointer position can scroll by (dx, dy) along an enabled axis, or whether a
+// scroll container is currently latched to an active trackpad gesture.
+func (c *Context) CanScrollUnderPointer(dx, dy float32) bool {
+	rt := c.runtime()
+	if rt == nil {
+		return false
+	}
+	if rt.trackpad.gestureActive && rt.trackpad.targetID != 0 {
+		return true
+	}
+	var chainBuf [24]uint64
+	chain := rt.appendHitChain(chainBuf[:0], rt.pointerX, rt.pointerY)
+	hasX, hasY := rt.chainScrollAxes(chain)
+	for _, id := range chain {
+		st := rt.states[id]
+		if st == nil {
+			continue
+		}
+		sx, sy := st.vector(rt.pointerX, rt.pointerY, dx, dy)
+		fx, fy, ok := filterScrollAxes(st, sx, sy, hasX, hasY)
+		if !ok {
+			continue
+		}
+		if canMoveScrollOrUnwind(st, fx, fy) {
+			return true
+		}
+	}
+	return false
+}
+
 // TrackScroll keeps the scrolling of a scroll container (Scroll,
 // ScrollHorizontal, ScrollBoth, List) in *s: the container shows its
 // content from s.X and s.Y, and writes there as the user scrolls it. The
@@ -175,7 +239,9 @@ func (e *node) adoptScroll() bool {
 	}
 	st.beginMove(e.c.rt.frame)
 	st.wheel = nil // the app takes over from the wheel
-	st.haltSnap()  // and from snapping
+	tpResetOver(st)
+	e.c.rt.trackpad.clearBounce(st.id)
+	st.haltSnap() // and from snapping
 	if t.X != float32(st.scrollX) {
 		st.scrollX = float64(t.X)
 	}

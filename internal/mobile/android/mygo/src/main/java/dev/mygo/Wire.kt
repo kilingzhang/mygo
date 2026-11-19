@@ -1226,6 +1226,28 @@ class SetFrameRateCall(
     }
 }
 
+class PluginCallSyncCall(
+    @JvmField var plugin: String = "",
+    @JvmField var method: String = "",
+    @JvmField var args: String = "",
+) {
+    constructor(r: WireReader) : this() {
+        plugin = r.string()
+        method = r.string()
+        args = r.string()
+    }
+}
+
+class PluginCallSyncReply(
+    @JvmField var handled: Boolean = false,
+    @JvmField var data: ByteArray = ByteArray(0),
+) {
+    fun encode(w: WireWriter) {
+        w.bool(handled)
+        w.bytes(data)
+    }
+}
+
 /** The calls Go makes of the host, on the UI thread. */
 interface HostCalls {
     /** the app's bundle and the system's settings, asked once at start */
@@ -1361,6 +1383,8 @@ interface HostCalls {
     fun registerFont(c: RegisterFontCall): RegisterFontReply
     /** how many Frames a second come from now on while they follow each other, a whole fraction of the display's rate, or 0 for the display's own (platform.FrameRateSurface) */
     fun setFrameRate(c: SetFrameRateCall)
+    /** a plugin's bounded synchronous native calculation; Args is JSON and Data is raw bytes */
+    fun pluginCallSync(c: PluginCallSyncCall): PluginCallSyncReply
 }
 
 /** Runs a call on h and encodes its reply, null for a call not waited for. */
@@ -1454,6 +1478,7 @@ fun dispatchCall(h: HostCalls, buf: ByteArray): ByteArray? {
         84 -> { h.drawText(DrawTextCall(r)).encode(w); return w.toByteArray() }
         85 -> { h.registerFont(RegisterFontCall(r)).encode(w); return w.toByteArray() }
         86 -> h.setFrameRate(SetFrameRateCall(r))
+        87 -> { h.pluginCallSync(PluginCallSyncCall(r)).encode(w); return w.toByteArray() }
     }
     return null
 }

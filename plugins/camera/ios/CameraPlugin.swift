@@ -1,13 +1,24 @@
 import AVFoundation
 import UIKit
 
-private final class PreviewView: UIView, AVCapturePhotoCaptureDelegate {
+private final class PreviewView: UIView, AVCapturePhotoCaptureDelegate, AVCaptureMetadataOutputObjectsDelegate {
     override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+    let viewID: Int
     let session = AVCaptureSession()
     let output = AVCapturePhotoOutput()
+    let metadata = AVCaptureMetadataOutput()
     var waiting: PluginReply?
+    private var lastCode: String = ""
+    private var lastCodeAt: CFTimeInterval = 0
 
-    func start(front: Bool) {
+    init(id: Int) {
+        self.viewID = id
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func start(front: Bool, scanCodes: Bool) {
         (layer as! AVCaptureVideoPreviewLayer).session = session
         (layer as! AVCaptureVideoPreviewLayer).videoGravity = .resizeAspectFill
         AVCaptureDevice.requestAccess(for: .video) { granted in
@@ -18,8 +29,29 @@ private final class PreviewView: UIView, AVCapturePhotoCaptureDelegate {
             self.session.beginConfiguration()
             if self.session.canAddInput(input) { self.session.addInput(input) }
             if self.session.canAddOutput(self.output) { self.session.addOutput(self.output) }
+            if scanCodes && self.session.canAddOutput(self.metadata) {
+                self.session.addOutput(self.metadata)
+                self.metadata.setMetadataObjectsDelegate(self, queue: .main)
+                let qrTypes: [AVMetadataObject.ObjectType] = [.qr]
+                self.metadata.metadataObjectTypes = qrTypes.filter { self.metadata.availableMetadataObjectTypes.contains($0) }
+            }
             self.session.commitConfiguration()
             DispatchQueue.global(qos: .userInitiated).async { self.session.startRunning() }
+        }
+    }
+
+    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
+        for obj in metadataObjects {
+            guard let readable = obj as? AVMetadataMachineReadableCodeObject,
+                  let str = readable.stringValue, !str.isEmpty else { continue }
+            let now = CACurrentMediaTime()
+            if str == lastCode && now - lastCodeAt < 1.5 {
+                continue
+            }
+            lastCode = str
+            lastCodeAt = now
+            PluginHost.emit("camera", "code", ["id": viewID, "value": str])
+            break
         }
     }
 
@@ -49,9 +81,9 @@ final class CameraPlugin: MyGoPlugin {
 
     init() {
         PluginHost.registerView("camera") { [weak self] id, args in
-            let v = PreviewView()
+            let v = PreviewView(id: id)
             self?.views[id] = v
-            v.start(front: args["front"] as? Bool ?? false)
+            v.start(front: args["front"] as? Bool ?? false, scanCodes: args["scanCodes"] as? Bool ?? false)
             return v
         }
     }

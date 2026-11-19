@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"encoding/binary"
+	"hash/fnv"
 	"runtime"
+	"slices"
 	"strings"
 )
 
@@ -157,6 +160,7 @@ func (rt *engine) textSelectionVisible(s *state) bool {
 }
 
 func (rt *engine) syncTextSelection() {
+	defer rt.notifyTextSelection()
 	for _, s := range rt.texts {
 		if s.textScope != 0 {
 			s.editor.anchor, s.editor.caret = 0, 0
@@ -416,9 +420,361 @@ func (rt *engine) selectedTexts(scope uint64) []SelectedText {
 		if i == last {
 			to = min(b.at, to)
 		}
-		parts = append(parts, SelectedText{ID: p.id, Text: p.editor.source, Start: from, End: to})
+		var ancestors []uint64
+		for parent := p.parent; parent != 0; {
+			ancestors = append(ancestors, parent)
+			if parent == scope {
+				break
+			}
+			next := rt.states[parent]
+			if next == nil {
+				break
+			}
+			parent = next.parent
+		}
+		parts = append(parts, SelectedText{
+			ID:        p.id,
+			Text:      p.editor.source,
+			Start:     from,
+			End:       to,
+			Ancestors: ancestors,
+		})
 	}
 	return parts
+}
+
+type selectionStamp struct {
+	scope    uint64
+	anchor   textPoint
+	caret    textPoint
+	parts    int
+	textHash uint64
+}
+
+// notifyTextSelection calls the Selectable container's OnSelectionChange
+// once per change, after layout. A drag waits for its release, so a toolbar
+// does not chase the pointer.
+func (rt *engine) notifyTextSelection() {
+	suppress := rt.suppressSelectionNotify
+	rt.suppressSelectionNotify = false
+	if rt.selection.dragging {
+		return
+	}
+	scope := rt.selection.scope
+	if scope == 0 {
+		if suppress {
+			rt.lastSelectionScope = 0
+			rt.lastSelectionStamp = selectionStamp{}
+			return
+		}
+		rt.clearSelectionNotification()
+		return
+	}
+	parts := rt.selectedTexts(scope)
+	if len(parts) == 0 {
+		if suppress {
+			rt.lastSelectionScope = 0
+			rt.lastSelectionStamp = selectionStamp{}
+			return
+		}
+		rt.clearSelectionNotification()
+		return
+	}
+	if rt.lastSelectionScope != 0 && rt.lastSelectionScope != scope {
+		rt.clearSelectionNotification()
+	}
+	stamp := selectionStamp{
+		scope:  scope,
+		anchor: rt.selection.anchor,
+		caret:  rt.selection.caret,
+		parts:  len(parts),
+	}
+	h := fnv.New64a()
+	var buf [8]byte
+	for _, part := range parts {
+		binary.LittleEndian.PutUint64(buf[:], part.ID)
+		h.Write(buf[:])
+		binary.LittleEndian.PutUint64(buf[:], uint64(part.Start))
+		h.Write(buf[:])
+		binary.LittleEndian.PutUint64(buf[:], uint64(part.End))
+		h.Write(buf[:])
+		h.Write([]byte(part.Text))
+	}
+	stamp.textHash = h.Sum64()
+	if stamp == rt.lastSelectionStamp {
+		return
+	}
+	rt.lastSelectionStamp = stamp
+	rt.lastSelectionScope = scope
+	if suppress {
+		return
+	}
+	if s := rt.states[scope]; s != nil && s.selectionFn != nil {
+		s.selectionFn(parts)
+	}
+}
+
+func (rt *engine) clearSelectionNotification() {
+	scope := rt.lastSelectionScope
+	if scope == 0 {
+		return
+	}
+	rt.lastSelectionScope = 0
+	rt.lastSelectionStamp = selectionStamp{}
+	if s := rt.states[scope]; s != nil && s.selectionFn != nil {
+		s.selectionFn(nil)
+	}
+}
+
+// selectionRects returns the visible rectangles of the selection of a
+// Selectable container, in build order.
+func (rt *engine) selectionRects(scope uint64) []Rect {
+	parts := rt.selectedTexts(scope)
+	if len(parts) == 0 {
+		return nil
+	}
+	var out []Rect
+	for _, part := range parts {
+		s := rt.states[part.ID]
+		if s == nil || s.editor == nil || s.editor.layout == nil {
+			continue
+		}
+		for _, r := range s.editor.layout.SelectionVisual(part.Start, part.End, false) {
+			rect := transformRect(s.world, Rect{
+				X: s.x + s.editor.originX + r.X,
+				Y: s.y + s.editor.originY + r.Y,
+				W: r.W,
+				H: r.H,
+			})
+			rect = intersect(rect, Rect{X: s.vx, Y: s.vy, W: s.vw, H: s.vh})
+			if rect.W > 0 && rect.H > 0 {
+				out = append(out, rect)
+			}
+		}
+	}
+	return out
+}
+
+func (rt *engine) selectionBounds(scope uint64) (Rect, bool) {
+	return boundsOfRects(rt.selectionRects(scope))
+}
+
+func boundsOfRects(rects []Rect) (Rect, bool) {
+	if len(rects) == 0 {
+		return Rect{}, false
+	}
+	b := rects[0]
+	for _, r := range rects[1:] {
+		x0, y0 := min(b.X, r.X), min(b.Y, r.Y)
+		x1, y1 := max(b.X+b.W, r.X+r.W), max(b.Y+b.H, r.Y+r.H)
+		b = Rect{X: x0, Y: y0, W: x1 - x0, H: y1 - y0}
+	}
+	return b, true
+}
+
+func (rt *engine) stateWithin(id, root uint64) bool {
+	for s := rt.states[id]; s != nil; s = rt.states[s.parent] {
+		if s.id == root {
+			return true
+		}
+		if s.parent == 0 {
+			break
+		}
+	}
+	return false
+}
+
+func (rt *engine) subtreeText(scope, root uint64) string {
+	if scope == 0 || root == 0 {
+		return ""
+	}
+	var b strings.Builder
+	wrote := false
+	for _, s := range rt.texts {
+		if s.textScope != scope || s.editor == nil || !rt.stateWithin(s.id, root) {
+			continue
+		}
+		if wrote {
+			b.WriteByte('\n')
+		}
+		b.WriteString(s.editor.source)
+		wrote = true
+	}
+	return b.String()
+}
+
+func (rt *engine) subtreeSelectionRange(scope, root uint64) (string, int, int, bool) {
+	if scope == 0 || root == 0 {
+		return "", 0, 0, false
+	}
+	a, b, selected := rt.textSelectionBounds()
+	if !selected || rt.selection.scope != scope {
+		return "", 0, 0, false
+	}
+	if !rt.stateWithin(a.id, root) || !rt.stateWithin(b.id, root) {
+		return "", 0, 0, false
+	}
+	var out strings.Builder
+	offset := 0
+	rawStart, rawEnd := -1, -1
+	wrote := false
+	for _, s := range rt.texts {
+		if s.textScope != scope || s.editor == nil || !rt.stateWithin(s.id, root) {
+			continue
+		}
+		if wrote {
+			out.WriteByte('\n')
+			offset++
+		}
+		n := s.editor.buf.n
+		if s.id == a.id {
+			rawStart = offset + max(0, min(a.at, n))
+		}
+		if s.id == b.id {
+			rawEnd = offset + max(0, min(b.at, n))
+		}
+		out.WriteString(s.editor.source)
+		offset += n
+		wrote = true
+	}
+	if rawStart < 0 || rawEnd <= rawStart {
+		return "", 0, 0, false
+	}
+	return out.String(), rawStart, rawEnd, true
+}
+
+func (rt *engine) subtreeRangeRects(scope, root uint64, start, end int, clip bool) []Rect {
+	if scope == 0 || root == 0 || end <= start {
+		return nil
+	}
+	var out []Rect
+	offset := 0
+	first := true
+	for _, s := range rt.texts {
+		if s.textScope != scope || s.editor == nil || !rt.stateWithin(s.id, root) {
+			continue
+		}
+		if !first {
+			offset++
+		}
+		first = false
+		n := s.editor.buf.n
+		pStart, pEnd := offset, offset+n
+		offset = pEnd
+		from, to := max(start, pStart), min(end, pEnd)
+		if from >= to || s.editor.layout == nil {
+			continue
+		}
+		for _, r := range s.editor.layout.SelectionVisual(from-pStart, to-pStart, false) {
+			rect := transformRect(s.world, Rect{
+				X: s.x + s.editor.originX + r.X,
+				Y: s.y + s.editor.originY + r.Y,
+				W: r.W,
+				H: r.H,
+			})
+			if clip {
+				rect = intersect(rect, Rect{X: s.vx, Y: s.vy, W: s.vw, H: s.vh})
+			}
+			if rect.W > 0 && rect.H > 0 {
+				out = append(out, rect)
+			}
+		}
+	}
+	return out
+}
+
+func (rt *engine) selectTextIn(scope, root uint64, text string, occurrence int) bool {
+	quote := []rune(text)
+	if scope == 0 || root == 0 || len(quote) == 0 || occurrence < 0 {
+		return false
+	}
+	type part struct {
+		state      *state
+		start, end int
+	}
+	var runes []rune
+	var parts []part
+	for _, s := range rt.texts {
+		if s.textScope != scope || !rt.stateWithin(s.id, root) {
+			continue
+		}
+		if len(parts) > 0 {
+			runes = append(runes, '\n')
+		}
+		start := len(runes)
+		runes = append(runes, []rune(s.editor.source)...)
+		parts = append(parts, part{state: s, start: start, end: len(runes)})
+	}
+	if len(parts) == 0 {
+		return false
+	}
+	index := -1
+	from := 0
+	for n := 0; n <= occurrence; n++ {
+		found := -1
+		for i := from; i+len(quote) <= len(runes); i++ {
+			if slices.Equal(runes[i:i+len(quote)], quote) {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			return false
+		}
+		index = found
+		from = found + 1
+	}
+	end := index + len(quote)
+	point := func(at int) textPoint {
+		for _, p := range parts {
+			if at >= p.start && at <= p.end {
+				return textPoint{p.state.id, at - p.start}
+			}
+		}
+		last := parts[len(parts)-1]
+		return textPoint{last.state.id, last.end - last.start}
+	}
+	startPoint, endPoint := point(index), point(end)
+	if startPoint.id == 0 || endPoint.id == 0 || rt.compareTextPoints(startPoint, endPoint) >= 0 {
+		return false
+	}
+	rt.selection = textSelection{scope: scope, anchor: startPoint, caret: endPoint}
+	rt.selection.start = [2]textPoint{startPoint, endPoint}
+	rt.suppressSelectionNotify = true
+	rt.focused, rt.focusVisible = startPoint.id, false
+	rt.requestFrame()
+	return true
+}
+
+func (rt *engine) clearTextSelection(scope uint64) {
+	if scope == 0 || rt.selection.scope != scope {
+		return
+	}
+	rt.selection = textSelection{}
+	rt.suppressSelectionNotify = true
+	rt.requestFrame()
+}
+
+func (rt *engine) clearTextSelectionIf(scope uint64, text string) bool {
+	if scope == 0 || rt.selection.scope != scope {
+		return false
+	}
+	parts := rt.selectedTexts(scope)
+	var b strings.Builder
+	for i, p := range parts {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		runes := []rune(p.Text)
+		start := max(0, min(p.Start, len(runes)))
+		end := max(start, min(p.End, len(runes)))
+		b.WriteString(string(runes[start:end]))
+	}
+	if b.String() != text {
+		return false
+	}
+	rt.clearTextSelection(scope)
+	return true
 }
 
 func (rt *engine) neighboringText(p textPoint, direction int) *state {

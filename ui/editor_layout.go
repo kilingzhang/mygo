@@ -264,15 +264,15 @@ func (ed *editor) spansOf(ranges []TextRange, start, end int) (string, *spanPain
 func (ed *editor) styleRanges(ranges []TextRange, start, end int, paint bool) (string, *spanPaint) {
 	reach := len(ranges)
 	if !paint {
-		weighted := false
+		styled := false
 		for i, r := range ranges {
 			if r.Start >= end {
 				reach = i
 				break
 			}
-			weighted = weighted || r.Weight > 0 && max(r.Start, start) < min(r.End, end)
+			styled = styled || (r.Weight > 0 || r.ObjectWidth > 0 || r.Size > 0) && max(r.Start, start) < min(r.End, end)
 		}
-		if !weighted {
+		if !styled {
 			return "", nil
 		}
 	}
@@ -306,13 +306,20 @@ func (ed *editor) styleRanges(ranges []TextRange, start, end int, paint bool) (s
 				spans = append(spans, Span{})
 			}
 		}
-		styles = append(styles, text.Span{End: to, Weight: r.Weight})
+		objectWidth := float32(0)
+		if r.ObjectWidth > 0 {
+			objectWidth = r.ObjectWidth / float32(max(1, r.End-r.Start))
+		}
+		styles = append(styles, text.Span{
+			End: to, Weight: r.Weight, Size: r.Size,
+			ObjectWidth: objectWidth, ObjectHeight: r.ObjectHeight, ObjectDescent: r.ObjectDescent,
+		})
 		if paint {
-			spans = append(spans, Span{Color: r.Color, Weight: r.Weight})
+			spans = append(spans, Span{Color: r.Color, Weight: r.Weight, colorSet: r.Hidden})
 		}
 		at = to
 	}
-	weighted, colored := false, false
+	styled, colored := false, false
 	for _, r := range ranges[:reach] {
 		if r.Start >= end {
 			break
@@ -327,11 +334,11 @@ func (ed *editor) styleRanges(ranges []TextRange, start, end int, paint bool) (s
 		} else {
 			add(local(from, true), local(to, false), r)
 		}
-		weighted = weighted || r.Weight > 0
-		colored = colored || r.Color.A > 0
+		styled = styled || r.Weight > 0 || r.ObjectWidth > 0 || r.Size > 0
+		colored = colored || r.Color.A > 0 || r.Hidden
 	}
 	key := ""
-	if weighted {
+	if styled {
 		key = text.EncodeSpans(styles)
 	}
 	var sp *spanPaint

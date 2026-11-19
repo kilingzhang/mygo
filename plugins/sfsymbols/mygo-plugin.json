@@ -1,0 +1,9 @@
+{
+  "mobile": {
+    "id": "sfsymbols",
+    "ios": {
+      "sources": ["ios/*.swift"],
+      "class": "SFSymbolsPlugin"
+    }
+  }
+}

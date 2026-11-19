@@ -58,6 +58,8 @@ func wheelMoves(s *state, dx, dy float32) bool {
 // of the notches on their way there.
 func (rt *engine) wheelScroll(s *state, dx, dy float32) {
 	now := rt.now()
+	tpResetOver(s)
+	rt.trackpad.clearBounce(s.id)
 	g := s.wheel
 	if g == nil || g.reveal {
 		// The user takes over from ScrollIntoView too.

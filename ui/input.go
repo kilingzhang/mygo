@@ -135,7 +135,7 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		}
 	case platform.PointerScroll:
 		rt.pointerMove(x, y)
-		rt.scroll(float32(ev.DX), float32(ev.DY), Modifiers(ev.Mods), ev.Precise, ev.Momentum)
+		rt.scroll(float32(ev.DX), float32(ev.DY), Modifiers(ev.Mods), ev.Precise, ev.Momentum, ev.Phase, ev.MomentumPhase)
 	case platform.PointerZoom:
 		rt.pointerMove(x, y)
 		rt.zoom(float32(ev.Scale), float32(ev.Rotation), Modifiers(ev.Mods))
@@ -903,7 +903,7 @@ func (s *state) quietClick(mods Modifiers) {
 	s.click(mods)
 }
 
-func (rt *engine) scroll(dx, dy float32, mods Modifiers, precise, momentum bool) {
+func (rt *engine) scroll(dx, dy float32, mods Modifiers, precise, momentum bool, phase, momentumPhase ScrollPhase) {
 	chain := rt.appendHitChain(rt.chain[:0], rt.pointerX, rt.pointerY)
 	rt.chain = chain[:0]
 	// From the innermost element out, the first handling its input to
@@ -912,7 +912,16 @@ func (rt *engine) scroll(dx, dy float32, mods Modifiers, precise, momentum bool)
 	// scrolls under what it shows over its text. Scroll containers move
 	// only when no handler takes it, so a handler around one, as a canvas
 	// that zooms with Ctrl and the wheel, still sees it first.
-	ev := InputEvent{Kind: InputScroll, DX: dx, DY: dy, Mods: mods, Precise: precise, Momentum: momentum}
+	ev := InputEvent{
+		Kind:          InputScroll,
+		DX:            dx,
+		DY:            dy,
+		Mods:          mods,
+		Precise:       precise,
+		Momentum:      momentum,
+		Phase:         phase,
+		MomentumPhase: momentumPhase,
+	}
 	for _, id := range chain {
 		if s := rt.states[id]; s != nil && s.input != nil && s.flags&flagDisabled == 0 && rt.deliver(s, ev) {
 			return
@@ -924,6 +933,10 @@ func (rt *engine) scroll(dx, dy float32, mods Modifiers, precise, momentum bool)
 	if sideways {
 		dx, dy = dy, 0
 	}
+	if rt.trackpad.handle(rt, chain, dx, dy, sideways, precise, momentum, phase, momentumPhase) {
+		return
+	}
+	hasX, hasY := rt.chainScrollAxes(chain)
 	// A wheel's notches glide, as browsers scroll them; a touchpad's
 	// small moves already follow the fingers.
 	glide := !precise && !rt.preferences().ReduceMotion
@@ -936,9 +949,13 @@ func (rt *engine) scroll(dx, dy float32, mods Modifiers, precise, momentum bool)
 		if sideways && s.rtl {
 			sx = -sx
 		}
+		fx, fy, axisOK := filterScrollAxes(s, sx, sy, hasX, hasY)
+		if !axisOK {
+			continue
+		}
 		if !precise {
 			// A notch goes to the next place of a container that snaps.
-			if moved, took := rt.snapNotch(s, sx, sy); took {
+			if moved, took := rt.snapNotch(s, fx, fy); took {
 				if moved {
 					return
 				}
@@ -946,14 +963,16 @@ func (rt *engine) scroll(dx, dy float32, mods Modifiers, precise, momentum bool)
 			}
 		}
 		if glide {
-			if wheelMoves(s, sx, sy) {
-				rt.wheelScroll(s, sx, sy)
+			if wheelMoves(s, fx, fy) {
+				rt.wheelScroll(s, fx, fy)
 				return
 			}
 			continue
 		}
 		s.wheel = nil
-		if scrollBy(s, sx, sy) {
+		tpResetOver(s)
+		rt.trackpad.clearBounce(s.id)
+		if scrollBy(s, fx, fy) {
 			if s.snap != nil {
 				// It rests at a place once the fingers, and the momentum
 				// of their fling, settle.
@@ -2183,6 +2202,8 @@ func (rt *engine) scrollbarPress(chain []uint64, x, y float32) bool {
 		d := &rt.scrollDrag
 		w, h := float64(s.w), float64(s.h)
 		s.wheel = nil
+		tpResetOver(s)
+		rt.trackpad.clearBounce(s.id)
 		s.haltSnap()
 		switch {
 		case g.vertical && g.vTrack.Contains(lx, ly):

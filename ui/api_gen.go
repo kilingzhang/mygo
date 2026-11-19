@@ -1750,7 +1750,9 @@ func Local[T any](e Element, key any, init func() T) *T {
 // Right opens a submenu and Left closes it, the other way round right to
 // left (Direction); Enter and Space choose an item, Escape closes the
 // submenu on top, and Tab and a press outside the menu close it. The
-// pointer highlights the item it moves onto, opening its submenu.
+// pointer highlights the item it moves onto, opening its submenu, but for
+// those it crosses heading for a submenu that shows, which stays open
+// until the pointer rests on one of them (menuAimGrace).
 // Assistive technology sees a menu button, expanded while its menu shows,
 // and a menu of items, check box items and radio items. PopoverMenuButton
 // draws its menu with these parts, in the theme's look.
@@ -4327,6 +4329,29 @@ func (_handle Element) ChildExit(m Motion) Element {
 	return wrapElement(_node.ChildExit(m))
 }
 
+// ClearSelection clears the selection of the Selectable container.
+func (_handle Element) ClearSelection() {
+	_node := _handle.node()
+	if _node == nil {
+		return
+	}
+	_ctx := _node.c
+	_ = _ctx
+	_node.ClearSelection()
+}
+
+// ClearSelectionIfText clears the selection of the Selectable container when
+// its selected text is text, leaving another selection alone.
+func (_handle Element) ClearSelectionIfText(text string) bool {
+	_node := _handle.node()
+	if _node == nil {
+		return false
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return _node.ClearSelectionIfText(text)
+}
+
 // ClickModifiers returns the modifier keys held as the element was last
 // clicked, none for a click by the keyboard: with Clicked, a click with
 // Shift or Cmd does something else, as extending a choice.
@@ -6790,6 +6815,21 @@ func (_handle Element) OnPaste(fn func(text string) bool) Element {
 	return wrapElement(_node.OnPaste(fn))
 }
 
+// OnSelectionChange has fn see the parts of the selection of a Selectable
+// container after it changes, on the main thread after layout. fn gets nil
+// when the selection clears or moves to another container. Call Invalidate
+// from fn to rebuild with the new selection, as a toolbar shown beside it
+// does. The selection of a nested Selectable container is its own.
+func (_handle Element) OnSelectionChange(fn func(parts []SelectedText)) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.OnSelectionChange(fn))
+}
+
 // OnTextKey has fn see a key pressed in the text input before the input
 // takes it, on the main thread as the key comes, with the text typed
 // before it in place, as AppKit's doCommandBySelector and a web page's
@@ -7956,6 +7996,20 @@ func (_handle Element) Search() Element {
 	return wrapElement(_node.Search())
 }
 
+// SelectTextIn selects the first occurrence of text in the paragraphs under
+// root, at or after occurrence, without notifying OnSelectionChange. It
+// returns false when the text is not found. The selection is the container's,
+// so a caller can clear it with ClearSelection.
+func (_handle Element) SelectTextIn(root uint64, text string, occurrence int) bool {
+	_node := _handle.node()
+	if _node == nil {
+		return false
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return _node.SelectTextIn(root, text, occurrence)
+}
+
 // Selectable lets the user select and copy text by dragging, double-clicking
 // a word, triple-clicking a paragraph, or using Shift with the arrows. Its
 // context menu has Copy and Select All; Cmd+C copies the selection.
@@ -8004,6 +8058,18 @@ func (_handle Element) SelectedTexts() []SelectedText {
 	return _node.SelectedTexts()
 }
 
+// SelectionBounds returns the union of SelectionRects, and whether the
+// container has a selection.
+func (_handle Element) SelectionBounds() (Rect, bool) {
+	_node := _handle.node()
+	if _node == nil {
+		return *new(Rect), false
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return _node.SelectionBounds()
+}
+
 // SelectionColor sets the highlight of selected text in the element and
 // the text inside it, as text on a colored bubble needs one that shows
 // on it; the theme's Selection is the highlight elsewhere.
@@ -8015,6 +8081,19 @@ func (_handle Element) SelectionColor(c Color) Element {
 	_ctx := _node.c
 	_ = _ctx
 	return wrapElement(_node.SelectionColor(c))
+}
+
+// SelectionRects returns the window rectangles of the selection of a
+// Selectable container, in build order, as of the last frame. It returns
+// none when the container's selection is empty or moved elsewhere.
+func (_handle Element) SelectionRects() []Rect {
+	_node := _handle.node()
+	if _node == nil {
+		return nil
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return _node.SelectionRects()
 }
 
 // SetChanged reports the element's value as changed in this build pass,
@@ -8340,6 +8419,57 @@ func (_handle Element) Submitted() bool {
 	return _node.Submitted()
 }
 
+// SubtreeRangeBounds returns the window bounds of the specified text range,
+// including portions clipped by scrolling, without changing selection or focus.
+func (_handle Element) SubtreeRangeBounds(root uint64, start int, end int) (Rect, bool) {
+	_node := _handle.node()
+	if _node == nil {
+		return *new(Rect), false
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return _node.SubtreeRangeBounds(root, start, end)
+}
+
+// SubtreeRangeRects returns the visible window rectangles of runes start up to
+// end of SubtreeText(root), in build order, without changing the container's
+// selection or focus.
+func (_handle Element) SubtreeRangeRects(root uint64, start int, end int) []Rect {
+	_node := _handle.node()
+	if _node == nil {
+		return nil
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return _node.SubtreeRangeRects(root, start, end)
+}
+
+// SubtreeSelectionRange returns SubtreeText(root) and the rune offsets of the
+// Selectable container's selection within it, or ok=false when the container
+// has no selection or its selection extends outside root.
+func (_handle Element) SubtreeSelectionRange(root uint64) (string, int, int, bool) {
+	_node := _handle.node()
+	if _node == nil {
+		return "", 0, 0, false
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return _node.SubtreeSelectionRange(root)
+}
+
+// SubtreeText returns the text of the selectable paragraphs under root that
+// belong to this Selectable container, joined with newlines in build order, as
+// of the last frame.
+func (_handle Element) SubtreeText(root uint64) string {
+	_node := _handle.node()
+	if _node == nil {
+		return ""
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return _node.SubtreeText(root)
+}
+
 // TabSize puts the tab stops of the element's text every n spaces of its
 // font from the start of each line, as CSS's tab-size: a tab advances
 // to the next of them, as a code block indents with tabs of 2 or 4
@@ -8433,6 +8563,20 @@ func (_handle Element) TextColor(c Color) Element {
 	_ctx := _node.c
 	_ = _ctx
 	return wrapElement(_node.TextColor(c))
+}
+
+// TextRangeRects returns the window rectangles of runes Start up to End of
+// a text input's text, as of the last frame: a composer draws a chip over a
+// hidden range with them. It returns none for an empty range or a text input
+// that has not laid out.
+func (_handle Element) TextRangeRects(start int, end int) []Rect {
+	_node := _handle.node()
+	if _node == nil {
+		return nil
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return _node.TextRangeRects(start, end)
 }
 
 // TextRanges styles runs of a text input's text, in the frames that call

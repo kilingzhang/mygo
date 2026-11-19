@@ -1,0 +1,6 @@
+packages:
+  - packages/*
+  - packages/cli/npm/*
+  - plugins/*
+  - examples/*
+  - website

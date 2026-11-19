@@ -341,6 +341,43 @@ func TestTouchOverscrolls(t *testing.T) {
 	tt.FingerUp(100, 110)
 }
 
+func TestTouchLongPressSelectableContextMenu(t *testing.T) {
+	chosen := false
+	tt := coreNewTester(func(c *context) {
+		coreColumn(c).Selectable().Children(func() {
+			coreColumn(c).ContextMenu(func(m *Menu) {
+				if m.Item("Copy Message").Chosen() {
+					chosen = true
+				}
+			}).Children(func() { coreText(c, "Chat message") })
+			coreText(c, "Standalone text")
+		})
+	}, 300, 200)
+	tt.Frame()
+
+	x, y := selectableAt(t, tt, "Chat message", 2)
+	tt.FingerDown(x, y)
+	tt.Advance(longPressDelay + 100*time.Millisecond)
+	tt.FingerUp(x, y)
+	tt.Frame()
+	if err := tt.ChooseMenuItem("Copy Message"); err != nil {
+		t.Fatal(err)
+	}
+	if !chosen {
+		t.Fatal("the custom menu did not receive the chosen item")
+	}
+
+	x, y = selectableAt(t, tt, "Standalone text", 2)
+	tt.FingerDown(x, y)
+	tt.Advance(longPressDelay + 100*time.Millisecond)
+	tt.FingerUp(x, y)
+	tt.Frame()
+	tt.Key(Cmd, KeyC)
+	if got := tt.Clipboard(); got != "Standalone" {
+		t.Fatalf("long press on text without a custom menu selected %q", got)
+	}
+}
+
 // A finger held still long-presses, which clicks nothing; moved first, it
 // does not.
 func TestTouchLongPress(t *testing.T) {

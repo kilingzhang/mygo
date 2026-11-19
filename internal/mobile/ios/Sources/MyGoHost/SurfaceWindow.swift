@@ -61,6 +61,7 @@ final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate
         // A mouse's or a trackpad's pointer, on an iPad: it hovers, it scrolls
         // with the wheel and two fingers, and it takes the content's shape.
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:)))
+        hover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
         addGestureRecognizer(hover)
         let wheel = UIPanGestureRecognizer(target: self, action: #selector(wheeled(_:)))
         wheel.allowedScrollTypesMask = .all

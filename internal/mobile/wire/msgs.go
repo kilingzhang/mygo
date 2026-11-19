@@ -90,6 +90,7 @@ const (
 	CallDrawText               = 84
 	CallRegisterFont           = 85
 	CallSetFrameRate           = 86
+	CallPluginCallSync         = 87
 )
 
 // Numbers of events.
@@ -1756,6 +1757,33 @@ func (m *SetFrameRate) Encode(w *Writer) {
 
 // Wait reports whether the caller waits for the host to run it.
 func (*SetFrameRate) Wait() bool { return false }
+
+// PluginCallSync is a plugin's bounded synchronous native calculation; Args is JSON and Data is raw bytes.
+type PluginCallSync struct {
+	Plugin string
+	Method string
+	Args   string
+}
+
+func (m *PluginCallSync) Encode(w *Writer) {
+	w.Uvarint(CallPluginCallSync)
+	w.String(m.Plugin)
+	w.String(m.Method)
+	w.String(m.Args)
+}
+
+// Wait reports whether the caller waits for the host to run it.
+func (*PluginCallSync) Wait() bool { return true }
+
+type PluginCallSyncReply struct {
+	Handled bool
+	Data    []byte
+}
+
+func (m *PluginCallSyncReply) Decode(r *Reader) {
+	m.Handled = r.Bool()
+	m.Data = r.Bytes()
+}
 
 // ReadyEvent is the app finished launching.
 type ReadyEvent struct {

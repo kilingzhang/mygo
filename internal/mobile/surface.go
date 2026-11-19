@@ -354,11 +354,15 @@ func (s *surface) FirstFrame() { s.w.b.call(&wire.FirstFrame{ID: s.w.id}, nil) }
 // near it counts as a double tap.
 func (s *surface) touch(e *wire.TouchEvent) {
 	if e.Kind != "touch" {
+		if e.Kind == "mouse" && (e.Phase == "down" || e.Phase == "move") {
+			s.w.b.notePointer(true)
+		}
 		s.mouse(e)
 		return
 	}
 	switch e.Phase {
 	case "down":
+		s.w.b.notePointer(false)
 		s.fingers[e.Pointer] = [2]float64{e.X, e.Y}
 		if len(s.fingers) == 4 && s.w.devTools {
 			// Four fingers open the inspector, as F12 does: a phone has no such
@@ -642,6 +646,9 @@ func (b *Backend) handleSurface(op uint64, r *wire.Reader, w *wire.Writer) bool 
 		var e wire.ScrollEvent
 		e.Decode(r)
 		if s := sf(e.ID); s != nil {
+			if e.Phase != "momentum" && (e.DX != 0 || e.DY != 0) {
+				b.notePointer(true)
+			}
 			s.send(platform.SurfaceEvent{Kind: platform.PointerScroll, X: e.X, Y: e.Y, DX: e.DX, DY: e.DY,
 				Precise: e.Precise, Momentum: e.Phase == "momentum"})
 		}

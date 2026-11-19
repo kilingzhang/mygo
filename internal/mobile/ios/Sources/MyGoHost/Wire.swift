@@ -1207,6 +1207,28 @@ public struct SetFrameRateCall {
     }
 }
 
+public struct PluginCallSyncCall {
+    public var plugin: String = ""
+    public var method: String = ""
+    public var args: String = ""
+    public init() {}
+    init(_ r: inout WireReader) {
+        plugin = r.string()
+        method = r.string()
+        args = r.string()
+    }
+}
+
+public struct PluginCallSyncReply {
+    public var handled: Bool = false
+    public var data: [UInt8] = []
+    public init() {}
+    func encode(_ w: inout WireWriter) {
+        w.bool(handled)
+        w.bytes(data)
+    }
+}
+
 /// The calls Go makes of the host, on the main thread.
 public protocol HostCalls: AnyObject {
     /// the app's bundle and the system's settings, asked once at start
@@ -1342,6 +1364,8 @@ public protocol HostCalls: AnyObject {
     func registerFont(_ c: RegisterFontCall) -> RegisterFontReply
     /// how many Frames a second come from now on while they follow each other, a whole fraction of the display's rate, or 0 for the display's own (platform.FrameRateSurface)
     func setFrameRate(_ c: SetFrameRateCall)
+    /// a plugin's bounded synchronous native calculation; Args is JSON and Data is raw bytes
+    func pluginCallSync(_ c: PluginCallSyncCall) -> PluginCallSyncReply
 }
 
 /// Runs a call on h and encodes its reply, nil for a call not waited for.
@@ -1607,6 +1631,9 @@ public func dispatchCall(_ h: HostCalls, _ buf: UnsafeRawBufferPointer) -> [UInt
     case 86:
         h.setFrameRate(SetFrameRateCall(&r))
         return nil
+    case 87:
+        h.pluginCallSync(PluginCallSyncCall(&r)).encode(&w)
+        return w.buf
     default:
         return nil
     }

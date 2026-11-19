@@ -412,9 +412,12 @@ type engine struct {
 	focused      uint64
 	// texts are selectable paragraphs in build order; selection spans those
 	// of one Selectable container (textselection.go).
-	texts        []*state
-	selection    textSelection
-	focusVisible bool
+	texts                   []*state
+	selection               textSelection
+	lastSelectionScope      uint64
+	lastSelectionStamp      selectionStamp
+	suppressSelectionNotify bool
+	focusVisible            bool
 	// keys are the keys pressed since the last frame, for its shortcuts;
 	// retried, keys no shortcut of the frame they came to took, which the
 	// shortcuts that frame built take in the next one; unrouted, those
@@ -634,6 +637,7 @@ type engine struct {
 	// wheeling are the elements of the scroll containers that the notches
 	// of a mouse wheel scroll smoothly (glideWheels).
 	wheeling []uint64
+	trackpad trackpadScroll
 	// snapping are the elements of the scroll containers that snap that
 	// are on their way to rest, or wait for the user's scrolling to settle
 	// (glideSnaps).
@@ -779,6 +783,7 @@ func (rt *engine) runFrame() {
 	rt.repaintRate, rt.repaintFull, rt.untracked = 0, false, false
 	rt.routeKeys()
 	rt.glideWheels(now)
+	rt.trackpad.step(rt, now)
 	if touchFrame != nil {
 		touchFrame(rt, now)
 	}
@@ -1728,6 +1733,7 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 		rt.observers++
 	}
 	s.copyData = e.copyData
+	s.selectionFn = e.selectionFn
 	if s.textClient != e.textClient {
 		if s.textAdapter != nil {
 			s.textAdapter.release()

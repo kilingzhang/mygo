@@ -261,8 +261,25 @@ func (t theme) SetSource(source string) { t.b.call(&wire.SetAppearance{Source: s
 func (t theme) Preferences() platform.Preferences {
 	var r wire.ThemeReply
 	t.b.call(&wire.Theme{}, &r)
-	return platform.Preferences{Accent: colorOf(r.Accent), ReduceMotion: r.ReduceMotion,
+	p := platform.Preferences{Accent: colorOf(r.Accent), ReduceMotion: r.ReduceMotion,
 		ReduceTransparency: r.ReduceTransparency, HighContrast: r.IncreaseContrast, TextScale: r.TextScale}
+	if !t.b.mousePrimary {
+		p.Pointer, p.NoHover = platform.PointerCoarse, true
+	}
+	if !t.b.mouseSeen {
+		p.AnyPointer, p.NoAnyHover = platform.PointerCoarse, true
+	}
+	return p
+}
+
+// notePointer changes preferences only when the primary input changes.
+func (b *Backend) notePointer(mouse bool) {
+	if b.mousePrimary == mouse {
+		return
+	}
+	b.mousePrimary = mouse
+	b.mouseSeen = b.mouseSeen || mouse
+	b.h.ThemeChanged()
 }
 
 type power struct {

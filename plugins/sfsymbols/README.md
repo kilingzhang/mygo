@@ -1,8 +1,8 @@
 # sfsymbols
 
 Apple's [SF Symbols](https://developer.apple.com/sf-symbols/) for
-[MyGo](https://github.com/egoist/mygo) apps of native UI on macOS: the
-symbols the running system has, drawn by AppKit and handed over as an
+[MyGo](https://github.com/egoist/mygo) apps of native UI on macOS and iOS: the
+symbols the running system has, drawn by AppKit or UIKit and handed over as an
 image.
 
 ```go

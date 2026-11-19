@@ -176,6 +176,9 @@ var calls = []msg{
 		args: []field{f("Data", "bytes"), f("Family", "string")}, reply: []field{f("Family", "string"), f("Error", "string")}},
 	{name: "SetFrameRate", doc: "how many Frames a second come from now on while they follow each other, a whole fraction of the display's rate, or 0 for the display's own (platform.FrameRateSurface)",
 		args: []field{f("ID", "int"), f("FPS", "float")}},
+	{name: "PluginCallSync", doc: "a plugin's bounded synchronous native calculation; Args is JSON and Data is raw bytes", wait: true,
+		args: []field{f("Plugin", "string"), f("Method", "string"), f("Args", "string")},
+		reply: []field{f("Handled", "bool"), f("Data", "bytes")}},
 }
 
 // events go from the host to Go.

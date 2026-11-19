@@ -66,6 +66,8 @@ type Backend struct {
 	// shown lists the windows on screen, the one in front last.
 	shown []*window
 	dark  bool
+	// Mouse activity changes the primary pointer until the next finger down.
+	mousePrimary, mouseSeen bool
 	// pluginEvents hears the events of plugins' native code.
 	pluginEvents func(plugin, name string, data []byte)
 	// ready is set once the core heard Ready, background while the app is

@@ -1,10 +1,10 @@
 # SF Symbols
 
-The sfsymbols plugin draws Apple's SF Symbols for native UI on macOS. The
-symbols are read from the running system: AppKit draws each with its own
+The sfsymbols plugin draws Apple's SF Symbols for native UI on macOS and iOS. The
+symbols are read from the running system: AppKit or UIKit draws each with its own
 design and weight, and the plugin copies the pixels into an image. Nothing
-of Apple's artwork is in your app or its build. It is all Go: no
-JavaScript package, and nothing to `mygo.Use`.
+of Apple's artwork is in your app or its build. Import the Go package to use it.
+The iOS renderer is included by `mygo build`.
 
 Show one as SwiftUI's `Image(systemName:)` does:
 
@@ -34,7 +34,7 @@ SwiftUI's:
 
 A `SymbolElement` is a `ui.Element` too: `Margin`, `Tooltip` and the rest
 work on it. Where the system has no symbol of the name (on another OS, or
-an older macOS) it draws its fallback, or nothing, at the same size.
+an older version of macOS or iOS) it draws its fallback, or nothing, at the same size.
 
 What it doesn't do, unlike SwiftUI: follow the text color of the element
 it is in (it takes the theme's, or `Color`), sit on the baseline of text
@@ -56,7 +56,7 @@ gives nil.
 For drawing with a `ui.Painter`, `Image(name, px, col, opts)` returns the symbol named `name` (as
 `"gearshape"`), drawn `px` pixels square in the color `col`, as a
 `ui.ImageSource`. It returns false where the system has no such symbol: on
-another OS, or on a macOS that lacks it. `Available` reports whether the
+another OS, or on an OS version that lacks it. `Available` reports whether the
 system draws SF Symbols at all.
 
 - `opts` holds `Natural` and `Weight`, as Symbol's modifiers.
@@ -72,7 +72,7 @@ system draws SF Symbols at all.
   limit, so an animated color or size doesn't grow
   memory without end. `Image` is safe to call from any goroutine.
 
-Every other OS has no SF Symbols: `Image` returns false there, so keep an
+Systems other than macOS and iOS lack SF Symbols: `Image` returns false there, so keep an
 icon of your own to fall back on, and use `ui.Image` or `Painter.Image`
 (with `ui.Contain`) for what it returns.
 

@@ -13,6 +13,7 @@ package camera
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/internal/platform"
@@ -25,6 +26,8 @@ const pluginID = "camera"
 type Options struct {
 	// Front chooses the camera on the screen's side.
 	Front bool
+	// ScanCodes emits QR codes seen in the preview through OnCode.
+	ScanCodes bool
 }
 
 // Camera is a preview of a camera, which takes photos. Show it with ui.WebView.
@@ -33,11 +36,29 @@ type Camera struct{ view *mygo.PluginView }
 // New asks the user for the camera, the first time, and makes its preview in a
 // window showing native UI.
 func New(w *mygo.Window, o Options) (*Camera, error) {
-	v, err := mygo.NewPluginView(w, "camera", map[string]any{"front": o.Front})
+	v, err := mygo.NewPluginView(w, "camera", map[string]any{"front": o.Front, "scanCodes": o.ScanCodes})
 	if err != nil {
 		return nil, err
 	}
 	return &Camera{v}, nil
+}
+
+// OnCode calls fn on the main thread when ScanCodes is enabled and a QR code
+// enters the preview. Call the returned function to stop listening.
+func (c *Camera) OnCode(fn func(value string)) (off func()) {
+	if c == nil || c.view == nil || fn == nil {
+		return func() {}
+	}
+	viewID := c.view.ID
+	return mygo.Native(pluginID).On("code", func(data []byte) {
+		var ev struct {
+			ID    int    `json:"id"`
+			Value string `json:"value"`
+		}
+		if json.Unmarshal(data, &ev) == nil && ev.ID == viewID && ev.Value != "" {
+			fn(ev.Value)
+		}
+	})
 }
 
 // SurfaceWebView gives package ui the view to show.

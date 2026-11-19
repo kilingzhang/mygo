@@ -69,6 +69,19 @@ const (
 	InputZoom
 )
 
+// ScrollPhase tells where a touchpad scroll or momentum sequence is in its
+// gesture lifecycle (may-begin, began, changed, ended, or canceled).
+type ScrollPhase = platform.ScrollPhase
+
+const (
+	ScrollPhaseNone     = platform.ScrollPhaseNone
+	ScrollPhaseMayBegin = platform.ScrollPhaseMayBegin
+	ScrollPhaseBegan    = platform.ScrollPhaseBegan
+	ScrollPhaseChanged  = platform.ScrollPhaseChanged
+	ScrollPhaseEnded    = platform.ScrollPhaseEnded
+	ScrollPhaseCanceled = platform.ScrollPhaseCanceled
+)
+
 // InputEvent is input an element takes as it comes (HandleInput).
 type InputEvent struct {
 	Kind InputKind
@@ -116,10 +129,10 @@ type InputEvent struct {
 	Pointer  PointerType
 	Pressure float32
 	// DX and DY are what InputScroll scrolls by, in local axes; positive DY moves the view
-	// down the content.
-	DX, DY   float32
-	Precise  bool
-	Momentum bool
+	// down the content. Phase and MomentumPhase report touchpad gesture boundaries when known.
+	DX, DY               float32
+	Precise, Momentum    bool
+	Phase, MomentumPhase ScrollPhase
 	// Scale is what InputZoom zooms by, and Rotation the radians clockwise
 	// two fingers turned, on touch screens.
 	Scale, Rotation float32

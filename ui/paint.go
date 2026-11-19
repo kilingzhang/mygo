@@ -250,7 +250,14 @@ func (e *node) ringMargin() float32 {
 func (e *node) setInk(vis Rect) {
 	m := e.shadowMargin() + e.ringMargin()
 	ink := [4]float32{vis.X - m, vis.Y - m, vis.X + vis.W + m, vis.Y + vis.H + m}
-	no := e.isInline() || e.kind == kindText && e.first != nil || e.effect != nil || e.blur > 0 ||
+	inline := e.isInline()
+	if inline && len(e.frags) == 0 {
+		// Empty/hidden inline children sit at (0, 0) and paint nothing; keep
+		// them from pulling the parent paragraph's ink box to the origin.
+		ink = [4]float32{inf, inf, -inf, -inf}
+	}
+	inlineNo := inline && (e.transform.set() || e.translatePct != [2]float32{})
+	no := inlineNo || e.effect != nil || e.blur > 0 ||
 		e.flags&(flagDividers|flagDebug) != 0 || e.ghosts || e.leaving != 0 || e.st.trec != nil
 	for ch := e.first; ch != nil; ch = ch.next {
 		ink = [4]float32{min(ink[0], ch.ink[0]), min(ink[1], ch.ink[1]), max(ink[2], ch.ink[2]), max(ink[3], ch.ink[3])}

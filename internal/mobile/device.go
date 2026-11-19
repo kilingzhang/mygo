@@ -73,6 +73,18 @@ func (b *Backend) PluginCall(plugin, method string, args []byte, done func([]byt
 	b.call(&wire.PluginCall{Req: req, Plugin: plugin, Method: method, Args: string(args)}, nil)
 }
 
+// PluginCallSync calls bounded native rendering work through the host without
+// pumping Go's event loop. It reports false when the method is unavailable.
+func PluginCallSync(plugin, method, args string) ([]byte, bool) {
+	b := current.Load()
+	if b == nil || b.t == nil {
+		return nil, false
+	}
+	var reply wire.PluginCallSyncReply
+	b.call(&wire.PluginCallSync{Plugin: plugin, Method: method, Args: args}, &reply)
+	return reply.Data, reply.Handled
+}
+
 func (b *Backend) OnPluginEvent(fn func(plugin, name string, data []byte)) { b.pluginEvents = fn }
 
 // StartedHidden reports whether the system started the app for something in the

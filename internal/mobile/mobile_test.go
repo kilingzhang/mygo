@@ -71,10 +71,11 @@ func (h *fakeHost) called(op uint64) bool {
 
 // app is an AppHandler that records what it heard.
 type app struct {
-	b     *Backend
-	ready chan struct{}
-	mu    sync.Mutex
-	posts []func()
+	b            *Backend
+	ready        chan struct{}
+	mu           sync.Mutex
+	posts        []func()
+	themeChanges int
 }
 
 func (a *app) Ready() { close(a.ready) }
@@ -96,7 +97,7 @@ func (a *app) DidResignActive()                                  {}
 func (a *app) OpenURLs([]string)                                 {}
 func (a *app) OpenFiles([]string)                                {}
 func (a *app) MenuItemClicked(int)                               {}
-func (a *app) ThemeChanged()                                     {}
+func (a *app) ThemeChanged()                                     { a.themeChanges++ }
 func (a *app) DisplaysChanged()                                  {}
 func (a *app) LocaleChanged()                                    {}
 func (a *app) PowerEvent(string)                                 {}

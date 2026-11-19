@@ -30,9 +30,10 @@ type Preferences struct {
 	// Pointer is how accurately the primary pointing device points, and
 	// AnyPointer the most accurate of all, as Media Queries 4's pointer
 	// and any-pointer: PointerFine for a mouse, a touchpad or a pen,
-	// PointerCoarse for a touch screen alone, or in Windows's tablet mode.
-	// A touch-first layout, with larger targets, reads Pointer; macOS's
-	// and those not known are a mouse's.
+	// PointerCoarse for a touch screen or Windows's tablet mode. On phones
+	// and tablets, Pointer follows the most recent touch or mouse activity
+	// and starts as PointerCoarse. A touch-first layout reads Pointer.
+	// macOS and platforms without pointer information use PointerFine.
 	Pointer, AnyPointer PointerAccuracy
 	// NoHover tells that the primary pointing device cannot hover, as a
 	// finger on a touch screen, and NoAnyHover that none can: Media

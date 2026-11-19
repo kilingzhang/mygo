@@ -129,7 +129,7 @@ func sameLayout(e *node, parent uint64, index int, changed bool) bool {
 	}
 	e.lay = layOwner
 	var spans string
-	if e.kind == kindText && e.spans != nil && e.first == nil {
+	if e.kind == kindText && (e.spans != nil || e.first != nil) && !e.isInline() {
 		spans = e.textSpans()
 	}
 	var media [2]float32
@@ -182,9 +182,16 @@ func sameLayout(e *node, parent uint64, index int, changed bool) bool {
 	// keep nothing: the next layout finds their states not seen by this
 	// one.
 	self := e.kind == kindInput || e.attach != 0 || e.ghosts
-	tree := e.special ||
-		e.leaving != 0 || e.kind == kindText && e.first != nil
+	tree := e.special || e.leaving != 0
 	if tree {
+		keepNoLayout(e)
+	} else if e.kind == kindText && e.first != nil {
+		// Inline children are positioned by placeInline from e.tl, not
+		// laid out separately; keep their lay flags cleared while allowing the
+		// enclosing paragraph to keep and reuse its layout when text & spans match.
+		if inlineVolatile(e) {
+			tree = true
+		}
 		keepNoLayout(e)
 	} else {
 		inner := changed || !sameText
@@ -203,6 +210,18 @@ func sameLayout(e *node, parent uint64, index int, changed bool) bool {
 		e.measured = r.measured
 	}
 	return true
+}
+
+func inlineVolatile(e *node) bool {
+	for c := e.first; c != nil; c = c.next {
+		if c.leaving != 0 || c.ghosts {
+			return true
+		}
+		if c.first != nil && inlineVolatile(c) {
+			return true
+		}
+	}
+	return false
 }
 
 // keepNoLayout makes the elements inside e keep and reuse no layout.

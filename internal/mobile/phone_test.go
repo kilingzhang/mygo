@@ -90,6 +90,34 @@ func surfaceWindow(t *testing.T, b *Backend, h *fakeHost) (*window, *surfaceEven
 	return w, wh
 }
 
+func TestMobilePointerPreferences(t *testing.T) {
+	b, h := startBackend(t)
+	w, _ := surfaceWindow(t, b, h)
+	onMain(b, func() {
+		check := func(mouse, seen bool, changes int) {
+			t.Helper()
+			prefs := (theme{b: b}).Preferences()
+			if (prefs.Pointer == platform.PointerFine) != mouse || prefs.NoHover == mouse ||
+				(prefs.AnyPointer == platform.PointerFine) != seen || prefs.NoAnyHover == seen ||
+				b.h.(*app).themeChanges != changes {
+				t.Errorf("preferences %+v, changes %d, want primary mouse %t, mouse seen %t, changes %d",
+					prefs, b.h.(*app).themeChanges, mouse, seen, changes)
+			}
+		}
+		check(false, false, 0)
+		w.s.touch(&wire.TouchEvent{Kind: "pen", Phase: "move"})
+		w.s.touch(&wire.TouchEvent{Kind: "mouse", Phase: "cancel"})
+		check(false, false, 0)
+		w.s.touch(&wire.TouchEvent{Kind: "mouse", Phase: "move"})
+		w.s.touch(&wire.TouchEvent{Kind: "mouse", Phase: "move"})
+		check(true, true, 1)
+		w.s.touch(&wire.TouchEvent{Kind: "touch", Phase: "down", Pointer: 1})
+		w.s.touch(&wire.TouchEvent{Kind: "touch", Phase: "move", Pointer: 1})
+		w.s.touch(&wire.TouchEvent{Kind: "touch", Phase: "up", Pointer: 1})
+		check(false, true, 2)
+	})
+}
+
 // The keyboard edits the document through its client, by UTF-16 offsets, and
 // gets the state after each edit in the answer.
 func TestKeyboardEdits(t *testing.T) {
