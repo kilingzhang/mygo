@@ -581,6 +581,20 @@ func checkPrivateAPIs(bin string) error {
 	return nil
 }
 
+type iosSigningMode int
+
+const (
+	iosSignWithProfile iosSigningMode = iota
+	iosSignAdHoc
+)
+
+func iosSigningModeFor(simulator bool, opts buildOptions) iosSigningMode {
+	if simulator || opts.iosUnsigned {
+		return iosSignAdHoc
+	}
+	return iosSignWithProfile
+}
+
 // buildIOS builds the app for iOS: a signed .ipa for devices (and the App
 // Store), or with simulator an .app for the simulator.
 func buildIOS(c *Config, opts buildOptions, simulator bool) ([]string, error) {
@@ -592,8 +606,9 @@ func buildIOS(c *Config, opts buildOptions, simulator bool) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	signingMode := iosSigningModeFor(simulator, opts)
 	var prof *profile
-	if !simulator {
+	if signingMode == iosSignWithProfile {
 		// Before building: no point building for a profile that isn't there.
 		if prof, err = pickProfile(c, c.IOS.Distribution, ""); err != nil {
 			return nil, err
@@ -627,8 +642,10 @@ func buildIOS(c *Config, opts buildOptions, simulator bool) ([]string, error) {
 	}
 	if err == nil {
 		tk.set("signing")
-		if simulator {
-			err = signForSimulator(bundle)
+		if signingMode == iosSignAdHoc {
+			// An enclosing Xcode build replaces this ad-hoc signature with a
+			// distribution signature and provisioning profile.
+			err = signAdHoc(bundle)
 		} else {
 			err = prof.sign(opts.work, bundle, c, exts)
 		}

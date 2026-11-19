@@ -7,6 +7,26 @@ import (
 	"testing"
 )
 
+func TestIOSSigningMode(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		simulator bool
+		unsigned  bool
+		want      iosSigningMode
+	}{
+		{name: "device with profile", want: iosSignWithProfile},
+		{name: "device without profile", unsigned: true, want: iosSignAdHoc},
+		{name: "simulator", simulator: true, want: iosSignAdHoc},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := iosSigningModeFor(tc.simulator, buildOptions{iosUnsigned: tc.unsigned})
+			if got != tc.want {
+				t.Fatalf("iosSigningModeFor(%t, unsigned %t) = %v; want %v", tc.simulator, tc.unsigned, got, tc.want)
+			}
+		})
+	}
+}
+
 // A simulator's executable carries the identifier of the bundle it is in,
 // which the keychain needs, with no plugin asking for anything too: in mygo
 // dev that is the development app's, <id>.dev.

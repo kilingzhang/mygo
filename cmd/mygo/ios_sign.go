@@ -5,11 +5,10 @@ import (
 	"path/filepath"
 )
 
-// signForSimulator signs the bundle for a simulator, with no identity, after its
-// frameworks and extensions. Entitlements don't go in such a signature, which the
-// simulator then refuses to launch: they're in the executable
-// (simulatorEntitlements), as Xcode has them.
-func signForSimulator(bundle string) error {
+// signAdHoc signs the bundle with no identity after its frameworks and
+// extensions. Simulator builds use this signature directly; device builds can
+// use it as a placeholder for an enclosing Xcode build to replace.
+func signAdHoc(bundle string) error {
 	if err := signFrameworks(bundle, "-"); err != nil {
 		return err
 	}

@@ -158,7 +158,7 @@ func (s *devSession) buildAndLaunchMobile(ctx context.Context, t *task, running 
 		if prof != nil {
 			err = prof.sign(work, app, dc, exts)
 		} else {
-			err = signForSimulator(app)
+			err = signAdHoc(app)
 		}
 		if err != nil {
 			return nil, sum, err

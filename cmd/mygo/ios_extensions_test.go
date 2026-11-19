@@ -177,7 +177,7 @@ func TestSignWithExtensions(t *testing.T) {
 func TestSignForSimulatorWithExtensions(t *testing.T) {
 	dir, bundle, _ := extensionBundle(t)
 	calls := recordIOSCodesign(t, dir)
-	if err := signForSimulator(bundle); err != nil {
+	if err := signAdHoc(bundle); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
