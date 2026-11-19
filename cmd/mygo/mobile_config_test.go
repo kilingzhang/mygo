@@ -383,6 +383,74 @@ func TestSigningEntitlements(t *testing.T) {
 	}
 }
 
+func TestSigningEntitlementsICloud(t *testing.T) {
+	p := &profile{name: "store", team: "TEAM", kind: "app-store", entitlements: map[string]any{
+		"application-identifier":              "TEAM.app.kong",
+		"beta-reports-active":                 true,
+		"com.apple.developer.team-identifier": "TEAM",
+		"get-task-allow":                      false,
+		"keychain-access-groups":              []any{"TEAM.*", "com.apple.token"},
+		icloudServicesKey:                     "*",
+		icloudEnvironmentKey:                  []any{"Production", "Development"},
+		icloudContainersKey:                   []any{"iCloud.app.kong"},
+		icloudDevelopmentContainersKey:        []any{"iCloud.app.kong"},
+		ubiquityContainersKey:                 []any{"iCloud.app.kong"},
+		ubiquityKVStoreKey:                    "TEAM.*",
+	}}
+	c := &Config{Identifier: "app.kong"}
+	ent, err := p.signingEntitlements(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ent[icloudDevelopmentContainersKey]; ok {
+		t.Errorf("the profile-only development containers are in the app's signature: %v", ent)
+	}
+	if ent[icloudEnvironmentKey] != "Production" {
+		t.Errorf("environment: %v", ent[icloudEnvironmentKey])
+	}
+	if got, _ := json.Marshal(ent[icloudServicesKey]); string(got) != `["CloudKit","CloudDocuments"]` {
+		t.Errorf("services: %s", got)
+	}
+	if ent[ubiquityKVStoreKey] != "TEAM.app.kong" {
+		t.Errorf("key-value store: %v", ent[ubiquityKVStoreKey])
+	}
+	if p.entitlements[icloudDevelopmentContainersKey] == nil || p.entitlements[ubiquityKVStoreKey] != "TEAM.*" {
+		t.Error("the profile's own entitlements changed")
+	}
+
+	// A development profile signs for the development environment.
+	p.kind = "development"
+	p.entitlements["get-task-allow"] = true
+	ent, err = p.signingEntitlements(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ent[icloudEnvironmentKey] != "Development" {
+		t.Errorf("development environment: %v", ent[icloudEnvironmentKey])
+	}
+
+	// Concrete values from a profile are what the app signs with.
+	p.kind = "app-store"
+	p.entitlements[icloudServicesKey] = []any{"CloudKit"}
+	p.entitlements[ubiquityKVStoreKey] = "TEAM.app.kong"
+	ent, err = p.signingEntitlements(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := json.Marshal(ent[icloudServicesKey]); string(got) != `["CloudKit"]` {
+		t.Errorf("concrete services: %s", got)
+	}
+	if ent[ubiquityKVStoreKey] != "TEAM.app.kong" {
+		t.Errorf("concrete key-value store: %v", ent[ubiquityKVStoreKey])
+	}
+
+	// A distribution profile must offer Production.
+	p.entitlements[icloudEnvironmentKey] = []any{"Development"}
+	if _, err := p.signingEntitlements(c); err == nil || !strings.Contains(err.Error(), "Production") {
+		t.Errorf("without Production: %v", err)
+	}
+}
+
 // android.extractNativeLibs reaches the host's Gradle build as a property,
 // which turns on the legacy packaging of jniLibs: AGP then writes
 // android:extractNativeLibs="true", which a module's manifest cannot.

@@ -927,8 +927,17 @@ func (p *profile) appIDPrefix() string {
 	return prefix
 }
 
+const (
+	icloudServicesKey              = "com.apple.developer.icloud-services"
+	icloudEnvironmentKey           = "com.apple.developer.icloud-container-environment"
+	icloudContainersKey            = "com.apple.developer.icloud-container-identifiers"
+	icloudDevelopmentContainersKey = "com.apple.developer.icloud-container-development-container-identifiers"
+	ubiquityContainersKey          = "com.apple.developer.ubiquity-container-identifiers"
+	ubiquityKVStoreKey             = "com.apple.developer.ubiquity-kvstore-identifier"
+)
+
 // signingEntitlements are those the app is signed with: the profile's, whose
-// wildcards become the app's identifier and domains.
+// wildcards become the app's identifier, containers, services and domains.
 func (p *profile) signingEntitlements(c *Config) (map[string]any, error) {
 	ent := make(map[string]any, len(p.entitlements)+1)
 	for k, v := range p.entitlements {
@@ -936,6 +945,9 @@ func (p *profile) signingEntitlements(c *Config) (map[string]any, error) {
 	}
 	// A wildcard profile's app ID becomes the app's.
 	ent["application-identifier"] = p.appIDPrefix() + "." + c.Identifier
+	if err := p.resolveICloudEntitlements(ent, c); err != nil {
+		return nil, err
+	}
 	// A plugin's need shows now, not as the app first asks for it on a phone.
 	if plugins, err := c.mobilePlugins("ios"); err == nil {
 		for k := range plugins.entitlements() {
@@ -952,6 +964,146 @@ func (p *profile) signingEntitlements(c *Config) (map[string]any, error) {
 		ent[associatedDomainsKey] = domains
 	}
 	return ent, nil
+}
+
+// resolveICloudEntitlements fills in the iCloud values a profile leaves
+// wildcard. Profiles list the services an App ID allows, and both iCloud
+// environments, for the code signing entitlements file to narrow; Xcode
+// writes the app's values, which App Store validation requires to be
+// concrete. The development-container key belongs to the profile alone.
+func (p *profile) resolveICloudEntitlements(ent map[string]any, c *Config) error {
+	delete(ent, icloudDevelopmentContainersKey)
+
+	if v, ok := ent[ubiquityKVStoreKey]; ok {
+		if s, ok := v.(string); ok && strings.Contains(s, "*") {
+			ent[ubiquityKVStoreKey] = p.appIDPrefix() + "." + c.Identifier
+		}
+	}
+	for _, key := range []string{icloudContainersKey, ubiquityContainersKey} {
+		if v, ok := ent[key]; ok {
+			ent[key] = resolveContainerIdentifiers(v, c.Identifier)
+		}
+	}
+	if v, ok := ent[icloudEnvironmentKey]; ok {
+		want := "Production"
+		if p.kind == "development" {
+			want = "Development"
+		}
+		env, err := resolveICloudEnvironment(v, want)
+		if err != nil {
+			return fmt.Errorf("%q: %v", p.name, err)
+		}
+		ent[icloudEnvironmentKey] = env
+	}
+	if v, ok := ent[icloudServicesKey]; ok {
+		services, err := resolveICloudServices(v, ent)
+		if err != nil {
+			return fmt.Errorf("%q: %v", p.name, err)
+		}
+		if len(services) == 0 {
+			delete(ent, icloudServicesKey)
+		} else {
+			ent[icloudServicesKey] = services
+		}
+	}
+	return nil
+}
+
+// resolveContainerIdentifiers replaces the wildcard of container IDs with
+// the app's identifier: iCloud.* becomes iCloud.com.example.app.
+func resolveContainerIdentifiers(v any, identifier string) any {
+	replace := func(s string) string { return strings.ReplaceAll(s, "*", identifier) }
+	switch v := v.(type) {
+	case string:
+		return replace(v)
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			if s, ok := item.(string); ok {
+				out[i] = replace(s)
+			} else {
+				out[i] = item
+			}
+		}
+		return out
+	case []string:
+		out := make([]any, len(v))
+		for i, s := range v {
+			out[i] = replace(s)
+		}
+		return out
+	}
+	return v
+}
+
+// resolveICloudEnvironment chooses the environment of the build from the
+// profile's list.
+func resolveICloudEnvironment(v any, want string) (string, error) {
+	includes := func(values []string) bool { return slices.Contains(values, want) }
+	switch v := v.(type) {
+	case string:
+		if v == "" {
+			return want, nil
+		}
+		return v, nil
+	case []any:
+		var values []string
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				values = append(values, s)
+			}
+		}
+		if includes(values) {
+			return want, nil
+		}
+	case []string:
+		if includes(v) {
+			return want, nil
+		}
+	default:
+		return want, nil
+	}
+	return "", fmt.Errorf("its iCloud environments do not include %s", want)
+}
+
+// resolveICloudServices replaces the wildcard of the profile's services with
+// those its containers enable: CloudKit for iCloud containers, and
+// CloudDocuments for ubiquity containers.
+func resolveICloudServices(v any, ent map[string]any) ([]any, error) {
+	var values []string
+	switch v := v.(type) {
+	case string:
+		values = []string{v}
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				values = append(values, s)
+			}
+		}
+	case []string:
+		values = v
+	default:
+		return nil, nil
+	}
+	if !slices.Contains(values, "*") {
+		out := make([]any, len(values))
+		for i, s := range values {
+			out[i] = s
+		}
+		return out, nil
+	}
+	var services []string
+	if _, ok := ent[icloudContainersKey]; ok {
+		services = append(services, "CloudKit")
+	}
+	if _, ok := ent[ubiquityContainersKey]; ok {
+		services = append(services, "CloudDocuments")
+	}
+	out := make([]any, len(services))
+	for i, s := range services {
+		out[i] = s
+	}
+	return out, nil
 }
 
 // sign embeds the profile, signs the bundle with its entitlements, after
