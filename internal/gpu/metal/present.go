@@ -239,6 +239,8 @@ func (r *Renderer) finishPending(prefetch bool) error {
 		// None came within a second: the frame is skipped, what it drew
 		// before its drawable committed.
 		r.forgetFrames()
+		r.recordPresent(false)
+		r.attachMetrics(p.cb)
 		send(p.cb, "commit")
 		r.track(p.cb)
 		release(&p.cb)
@@ -254,6 +256,8 @@ func (r *Renderer) finishPending(prefetch bool) error {
 		release(&p.cb)
 		return err
 	}
+	r.recordPresent(true)
+	r.attachMetrics(p.cb)
 	send(p.cb, "presentDrawable:", drawable)
 	send(p.cb, "commit")
 	if prefetch {

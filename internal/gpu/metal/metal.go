@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 	"weak"
@@ -127,6 +128,7 @@ var (
 	msgSetRect        func(obj id, sel objc.SEL, r cgRect)
 	msgRect           func(obj id, sel objc.SEL) cgRect
 	msgSetFloat       func(obj id, sel objc.SEL, v float64)
+	msgDouble         func(obj id, sel uintptr) float64
 	selMu             sync.Mutex
 	selectors         = map[string]objc.SEL{}
 	renderPass        id // MTLRenderPassDescriptor
@@ -228,6 +230,7 @@ func load() error {
 		purego.RegisterFunc(&msgSetSize, msgSend)
 		purego.RegisterFunc(&msgSetRect, msgSend)
 		purego.RegisterFunc(&msgSetFloat, msgSend)
+		purego.RegisterFunc(&msgDouble, msgSend)
 		purego.RegisterFunc(&msgRect, stret)
 		renderPass = class("MTLRenderPassDescriptor")
 		selSetPipeline = sel("setRenderPipelineState:")
@@ -520,6 +523,21 @@ type Renderer struct {
 
 	// drawState is the frames'.
 	drawState
+
+	// Opt-in GPU performance metrics (disabled unless SetMetrics(true) is called).
+	metricsEnabled  atomic.Bool
+	metricsMu       sync.Mutex
+	deviceName      string
+	completedBlock  objc.Block
+	selStatus       objc.SEL
+	selGPUStart     objc.SEL
+	selGPUEnd       objc.SEL
+	canCompleteCB   bool
+	presentedFrames uint64
+	droppedFrames   uint64
+	lastGPUTime     time.Duration
+	avgGPUTime      time.Duration
+	gpuFrames       uint64
 }
 
 // New creates a renderer drawing into a CAMetalLayer that it adds to
@@ -1871,15 +1889,21 @@ func (r *Renderer) render(s *scene.Scene) error {
 	if drawable == 0 {
 		// None came within a second: the frame is skipped, its canvases
 		// drawn.
+		r.recordPresent(false)
+		r.attachMetrics(cb)
 		send(cb, "commit")
 		r.track(cb)
 		return nil
 	}
 	if sync {
+		r.recordPresent(true)
+		r.attachMetrics(cb)
 		send(cb, "commit")
 		send(cb, "waitUntilScheduled")
 		send(drawable, "present")
 	} else {
+		r.recordPresent(true)
+		r.attachMetrics(cb)
 		send(cb, "presentDrawable:", drawable)
 		send(cb, "commit")
 		// The next frame's drawable, while this one is shown.
@@ -2224,6 +2248,7 @@ func (r *Renderer) Release() {
 	r.stopPipelines()
 	pool(func() {
 		r.waitLast()
+		r.releaseMetrics()
 		if r.layer != 0 {
 			tx := class("CATransaction")
 			send(tx, "begin")

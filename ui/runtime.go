@@ -583,6 +583,8 @@ type engine struct {
 	live liveState
 	// stats measures frames for MYGO_FRAME_STATS, nil when it is unset.
 	stats *frameStats
+	// perf collects live per-window metrics while Context.SetPerfMonitor(true) is active.
+	perf *perfMonitor
 	// dropOver is the element files are dragged over; access is true once
 	// assistive technology asked for the content, and accessNodes is how
 	// many nodes the last frame's tree had.
@@ -765,6 +767,11 @@ func (rt *engine) runFrame() {
 	rt.input = false
 	rt.focusRead, rt.activeRead, rt.withinRead, rt.keysRead = false, false, false, false
 	rt.stats.begin(rt)
+	var perfStart, perfBuildAt, perfLayoutAt, perfPaintAt, perfPresentAt time.Time
+	perfOn := rt.perf != nil && rt.perf.enabled
+	if perfOn {
+		perfStart = time.Now()
+	}
 	now := rt.frameTime()
 	rt.zoomChanged = false
 	w, h, scale := rt.size()
@@ -909,6 +916,9 @@ func (rt *engine) runFrame() {
 		rt.insp.applyEdits(root)
 	}
 	rt.stats.lap(phaseBuild)
+	if perfOn {
+		perfBuildAt = time.Now()
+	}
 	rt.insp.lap(0)
 	if insetRoot != nil {
 		insetRoot(rt, root)
@@ -943,6 +953,9 @@ func (rt *engine) runFrame() {
 	rt.collectSelectable(root, false)
 	rt.syncTextSelection()
 	rt.stats.lap(phaseLayout)
+	if perfOn {
+		perfLayoutAt = time.Now()
+	}
 	rt.insp.lap(1)
 	if rt.insp.open {
 		rt.insp.snapshot(rt, root)
@@ -962,6 +975,9 @@ func (rt *engine) runFrame() {
 		checkBuilt(rt, builtPainted)
 	}
 	rt.stats.lap(phasePaint)
+	if perfOn {
+		perfPaintAt = time.Now()
+	}
 	rt.insp.lap(2)
 	rt.syncStack()
 	rt.host.present(&rt.scene)
@@ -974,6 +990,9 @@ func (rt *engine) runFrame() {
 		rt.host.setMaximizeButton(r)
 	}
 	rt.stats.lap(phasePresent)
+	if perfOn {
+		perfPresentAt = time.Now()
+	}
 	rt.prune()
 	rt.syncDropFormats()
 	rt.prunePictures()
@@ -1021,6 +1040,18 @@ func (rt *engine) runFrame() {
 	rt.c.finish()
 	clear(rt.byID)
 	rt.stats.end(rt)
+	if perfOn && rt.perf != nil {
+		endAt := time.Now()
+		rt.perf.record(
+			rt,
+			perfBuildAt.Sub(perfStart),
+			perfLayoutAt.Sub(perfBuildAt),
+			perfPaintAt.Sub(perfLayoutAt),
+			perfPresentAt.Sub(perfPaintAt),
+			endAt.Sub(perfStart),
+			false,
+		)
+	}
 }
 
 // now returns the time, which a Tester sets (clock).
@@ -1195,6 +1226,8 @@ func (rt *engine) repaintFrame(w, h, scale float32) {
 	defer rt.endFrame()
 	rt.stats.begin(rt)
 	start := time.Now()
+	var perfPaintAt, perfPresentAt time.Time
+	perfOn := rt.perf != nil && rt.perf.enabled
 	rt.c.now = rt.frameTime()
 	rt.text.BeginFrame()
 	rt.paintFrames++
@@ -1221,12 +1254,22 @@ func (rt *engine) repaintFrame(w, h, scale float32) {
 		checkBuilt(rt, builtRepainted)
 	}
 	rt.stats.lap(phasePaint)
+	if perfOn {
+		perfPaintAt = time.Now()
+	}
 	rt.insp.repainted(time.Since(start))
 	rt.host.present(&rt.scene)
 	rt.stats.lap(phasePresent)
+	if perfOn {
+		perfPresentAt = time.Now()
+	}
 	rt.text.EndFrame()
 	rt.next()
 	rt.stats.end(rt)
+	if perfOn && rt.perf != nil {
+		endAt := time.Now()
+		rt.perf.record(rt, 0, 0, perfPaintAt.Sub(start), perfPresentAt.Sub(perfPaintAt), endAt.Sub(start), true)
+	}
 }
 
 // makeRoom prepares a recovery paint. On the last try, a still-full
@@ -1531,6 +1574,9 @@ func (rt *engine) close() {
 		return
 	}
 	rt.closed, rt.closing = true, false
+	if rt.perf != nil {
+		rt.perf.stop()
+	}
 	clear(rt.focusFields)
 	rt.focusFields = nil
 	for _, r := range rt.refs {

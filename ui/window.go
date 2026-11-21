@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/i18n"
+	"github.com/egoist/mygo/internal/gpu"
 	"github.com/egoist/mygo/internal/pacing"
 	"github.com/egoist/mygo/internal/platform"
 	"github.com/egoist/mygo/internal/raster"
@@ -686,6 +687,32 @@ func (h *windowHost) makeGPU() {
 		// Frames waiting for the display draw through the main thread.
 		p.SetPost(h.conn.Post)
 	}
+	if h.rt != nil && h.rt.perf != nil && h.rt.perf.enabled {
+		if mr, ok := r.(metricsRenderer); ok {
+			mr.SetMetrics(true)
+		}
+	}
+}
+
+func (h *windowHost) setGPUMetrics(enabled bool) {
+	if mr, ok := h.gpu.(metricsRenderer); ok {
+		mr.SetMetrics(enabled)
+	}
+}
+
+func (h *windowHost) perfGPU() (backend string, snap gpu.MetricsSnapshot, ok bool) {
+	if h.gpu == nil {
+		return "Software", gpu.MetricsSnapshot{}, false
+	}
+	if h.degraded || software(h.gpu) {
+		backend = "Software"
+	} else {
+		backend = "Metal"
+	}
+	if mr, has := h.gpu.(metricsRenderer); has {
+		return backend, mr.Metrics(), true
+	}
+	return backend, gpu.MetricsSnapshot{}, false
 }
 
 // tellOccluded tells the GPU renderer whether nothing of the window shows,

@@ -1,6 +1,21 @@
 package gpu
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
+
+// MetricsSnapshot holds the GPU renderer's latest presentation and timing metrics.
+type MetricsSnapshot struct {
+	DeviceName      string
+	DrawableWidth   int
+	DrawableHeight  int
+	PresentedFrames uint64
+	DroppedFrames   uint64
+	LastGPUTime     time.Duration
+	AvgGPUTime      time.Duration
+	GPUFrames       uint64
+}
 
 // Summary describes the last scene built, for logs (MYGO_FRAME_STATS): how
 // many instances in how many batches, how many ops were left out as covered,

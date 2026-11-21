@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ebitengine/purego"
-
 	"github.com/egoist/mygo/internal/scene"
 )
 
@@ -35,16 +33,11 @@ type Offscreen struct {
 	encoded time.Duration
 }
 
-var msgDouble func(obj id, sel uintptr) float64
-
 // NewOffscreen returns an Offscreen drawing frames of w×h pixels.
 func NewOffscreen(w, h int) (*Offscreen, error) {
 	r, err := newRenderer()
 	if err != nil {
 		return nil, err
-	}
-	if msgDouble == nil {
-		purego.RegisterFunc(&msgDouble, msgSend)
 	}
 	o := &Offscreen{r: r}
 	pool(func() { err = o.target(w, h) })
