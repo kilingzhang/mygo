@@ -341,6 +341,7 @@ class SurfaceWindow(context: Context, id: Long) : HostWindow(context, id) {
     /** The system's floating menu of the editing commands asked for. */
     fun showMenu(c: ShowMenuCall) {
         actionMode?.finish()
+        if (c.actions.isEmpty()) return
         val d = density
         val at = Rect((c.x * d).toInt(), (c.y * d).toInt(), (c.x * d).toInt() + 1, (c.y * d).toInt() + 1)
         actionMode = surface.startActionMode(object : ActionMode.Callback2() {

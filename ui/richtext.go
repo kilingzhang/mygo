@@ -35,6 +35,10 @@ type Span struct {
 	UnderlineOffset float32
 	// Background highlights the span, as search results are.
 	Background Color
+	// BorderWidth and BorderColor stroke the span's rounded background
+	// box, as an inline key cap (<kbd>).
+	BorderWidth float32
+	BorderColor Color
 	// Radius rounds the corners of the Background, which then hugs the
 	// span's glyphs, a little wider than them, rather than filling the
 	// line, as code within text shows.
@@ -250,7 +254,7 @@ func (sc *spanCache) update(spans []Span) {
 	paints := false
 	for i, s := range spans {
 		end += utf8.RuneCountInString(s.Text)
-		paints = paints || s.Color.A > 0 || s.colorSet || s.Underline || s.WavyUnderline || s.DottedUnderline || s.Strikethrough || s.Background.A > 0 || s.strokeSet || s.shadowSet || s.Shadow.color.A > 0
+		paints = paints || s.Color.A > 0 || s.colorSet || s.Underline || s.WavyUnderline || s.DottedUnderline || s.Strikethrough || s.Background.A > 0 || (s.BorderWidth > 0 && s.BorderColor.A > 0) || s.strokeSet || s.shadowSet || s.Shadow.color.A > 0
 		same = same && sc.styles[i] == spanStyle(s, end)
 	}
 	sc.paints = paints
@@ -527,7 +531,7 @@ func (sp *spanPaint) backgrounds(p *Painter, line *text.Line, x, y float32) {
 		saved := p.transform
 		p.transform = saved.Mul(p.inlineTransform(line.Glyphs[i].Cluster))
 		defer func() { p.transform = saved }()
-		if k < 0 || sp.spans[k].Background.A == 0 {
+		if k < 0 || (sp.spans[k].Background.A == 0 && !(sp.spans[k].BorderWidth > 0 && sp.spans[k].BorderColor.A > 0)) {
 			return
 		}
 		if s := &sp.spans[k]; s.Radius > 0 || s.PaddingX > 0 || s.PaddingY > 0 || s.PaddingStart > 0 {
@@ -544,7 +548,13 @@ func (sp *spanPaint) backgrounds(p *Painter, line *text.Line, x, y float32) {
 			}
 			py := max(s.PaddingY, 0)
 			base := line.Baseline - s.BaselineShift
-			p.Fill(Rect{x + x0 - pl, y + base - size*0.98 - py, x1 - x0 + pl + pr, size*1.32 + 2*py}, s.Background, s.Radius)
+			box := Rect{x + x0 - pl, y + base - size*0.98 - py, x1 - x0 + pl + pr, size*1.32 + 2*py}
+			if s.Background.A > 0 {
+				p.Fill(box, s.Background, s.Radius)
+			}
+			if s.BorderWidth > 0 && s.BorderColor.A > 0 {
+				p.Stroke(box, s.BorderColor, s.Radius, s.BorderWidth)
+			}
 			return
 		}
 		p.Fill(Rect{x + x0, y + line.Y, x1 - x0, line.Height}, sp.spans[k].Background, 0)

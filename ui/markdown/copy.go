@@ -49,16 +49,42 @@ func (st *viewState) copyText(parts []ui.SelectedText) string {
 	return b.String()
 }
 
+func (st *viewState) codeChunkObjects(inf elemInfo) []mathObject {
+	if inf.line < 0 || inf.block >= st.doc.Len() {
+		return nil
+	}
+	b := st.doc.Block(inf.block)
+	if b.Kind != parser.CodeBlock || st.codes == nil {
+		return nil
+	}
+	cs := st.codes[b.Start]
+	if cs == nil {
+		return nil
+	}
+	chIdx := inf.line / chunkLines
+	if chIdx < 0 || chIdx >= len(cs.chunks) {
+		return nil
+	}
+	return cs.chunks[chIdx].objects
+}
+
 // writeText writes the text of a selected part, with the source of the
 // math drawn as objects, as $x_i$, in place of their characters, and
-// without links' icons, which have no source, or their joiners.
+// without links' icons or color swatches, which have no source, or their joiners.
 func (st *viewState) writeText(b *strings.Builder, inf elemInfo, p ui.SelectedText) {
 	text := runeSlice(p.Text, p.Start, p.End)
-	if inf.line != -1 || inf.block >= len(st.paras) || !st.paras[inf.block].ok || len(st.paras[inf.block].p.objects) == 0 {
+	var objects []mathObject
+	if inf.line == -1 {
+		if inf.block < len(st.paras) && st.paras[inf.block].ok {
+			objects = st.paras[inf.block].p.objects
+		}
+	} else {
+		objects = st.codeChunkObjects(inf)
+	}
+	if len(objects) == 0 {
 		b.WriteString(text)
 		return
 	}
-	objects := st.paras[inf.block].p.objects
 	src := st.doc.Source()
 	r := p.Start
 	for _, c := range text {
@@ -167,6 +193,20 @@ func (st *viewState) srcAt(inf elemInfo, r int, end bool) int {
 	b := d.Block(inf.block)
 	switch b.Kind {
 	case parser.CodeBlock, parser.HTMLBlock, parser.MathBlock:
+		if objs := st.codeChunkObjects(inf); len(objs) > 0 {
+			// Subtract synthetic swatch + word-joiner runes before r.
+			drop := 0
+			for _, o := range objs {
+				if o.rune+1 < r {
+					drop += 2
+				} else if o.rune < r {
+					drop++
+				} else {
+					break
+				}
+			}
+			r = max(0, r-drop)
+		}
 		// Lines from inf.line on, each followed by a newline.
 		n := d.LineCount(inf.block)
 		for k := max(inf.line, 0); k < n; k++ {

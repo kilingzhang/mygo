@@ -91,6 +91,24 @@ type Options struct {
 	// its look; its source is untouched, so a document streaming in
 	// parses as it would without.
 	CodeLink func(code string) (dest string, ok bool)
+	// ColorLiterals, when true, renders inline color literals (such as
+	// `#10a37f`, `#fff`, `rgb(16, 163, 127)`, `hsl(165, 82%, 35%)`,
+	// `oklch(0.62 0.14 166)`, Tailwind colors, or `linear-gradient(...)`)
+	// with a color swatch and a readable, color-matched palette in prose,
+	// inline code, and code blocks while keeping clipboard copy untouched.
+	ColorLiterals bool
+	// RichTokens, when true, enhances <kbd> keycaps, HTTP method and status
+	// badges, RFC3339/Unix timestamps, and 5-field cron expressions.
+	RichTokens bool
+	// OnTokenClick, when set, handles clicks on interactive enriched tokens
+	// (colors, gradients, timestamps, cron expressions).
+	OnTokenClick func(c *ui.Context, tok InlineToken)
+	// TokenPreview, when set, returns a tooltip builder while the pointer
+	// rests on an interactive enriched token.
+	TokenPreview func(c *ui.Context, tok InlineToken) func(tip ui.Element)
+	// TokenMenu, when set, builds the context menu for an interactive
+	// enriched token.
+	TokenMenu func(m *ui.Menu, tok InlineToken)
 	// Preview, when set, returns what shows while the pointer rests on a
 	// link to dest, a mention's or a reference's included: a function
 	// filling the tip, as ui.TooltipBase does, or nil for the address
@@ -349,12 +367,14 @@ func build(c *ui.Context, src string, o *Options, streaming bool) ui.Element {
 	} else {
 		root.Selectable()
 		root.CopyData(st.copyData)
-		root.ContextMenu(func(m *ui.Menu) {
-			m.EditItems()
-			if m.Item(l10n.In(c.Locale()).CopyAsMarkdown()).Chosen() {
-				c.Services().WriteClipboardData(markdownData(st.copyMarkdown(root.SelectedTexts())))
-			}
-		})
+		if c.Preferences().Pointer != ui.PointerCoarse {
+			root.ContextMenu(func(m *ui.Menu) {
+				m.EditItems()
+				if m.Item(l10n.In(c.Locale()).CopyAsMarkdown()).Chosen() {
+					c.Services().WriteClipboardData(markdownData(st.copyMarkdown(root.SelectedTexts())))
+				}
+			})
+		}
 		if root.FocusWithin() && root.Shortcut(ui.Cmd|ui.Shift, ui.KeyC) {
 			c.Services().WriteClipboardData(markdownData(st.copyMarkdown(root.SelectedTexts())))
 		}
@@ -381,12 +401,13 @@ var defaultOptions Options
 // theme resolves the theme of the frame.
 func (st *viewState) theme(c *ui.Context) {
 	t := c.Theme()
-	if st.def == nil || st.uiTh != *t {
+	uiChanged := st.def == nil || st.uiTh != *t
+	if uiChanged {
 		st.uiTh = *t
 		st.def = DefaultTheme(t)
 	}
 	th := resolve(st.o.Theme, st.def)
-	if th != st.th {
+	if th != st.th || (uiChanged && (st.o.ColorLiterals || st.o.RichTokens)) {
 		st.th = th
 		clear(st.paras)
 		for _, cs := range st.codes {
@@ -394,6 +415,7 @@ func (st *viewState) theme(c *ui.Context) {
 		}
 	}
 	st.sb.d, st.sb.th = st.doc, &st.th
+	st.sb.dark, st.sb.surface = st.uiTh.Dark, st.uiTh.Background
 }
 
 // forget drops what the view made of its blocks.
@@ -417,8 +439,11 @@ func (st *viewState) blocks(c *ui.Context, parent int, tight bool, base spanStyl
 	prevHeading := 0
 	for j := parent + 1; j < d.Block(parent).Next; j = d.Block(j).Next {
 		b := d.Block(j)
-		if b.Kind == parser.FootnoteDefinition || b.Kind == parser.Paragraph && d.LineCount(j) == 0 {
-			// Footnotes show at the end, and an alert's marker not at all.
+		if b.Kind == parser.FootnoteDefinition ||
+			b.Kind == parser.Paragraph && d.LineCount(j) == 0 ||
+			b.Kind == parser.HTMLBlock && st.o.HTML == nil && st.o.Block == nil && isHTMLCommentBlock(d.Lines(j)) {
+			// Footnotes show at the end, an alert's marker not at all,
+			// and HTML comments are invisible in Markdown.
 			continue
 		}
 		top := float32(0)
@@ -460,7 +485,7 @@ func (st *viewState) block(c *ui.Context, i int, tight bool, base spanStyle) ui.
 	defer func(prev int) { st.cur = prev }(st.cur)
 	st.cur = i
 	if o.Block != nil {
-		box := ui.Column(c)
+		box := ui.Column(c).AlignSelf(ui.Stretch)
 		done := false
 		box.Children(func() { done = o.Block(c, d, i) })
 		if done {
@@ -595,8 +620,15 @@ func (st *viewState) para(i int, base spanStyle) *para {
 	if sb.resolvers != 0 {
 		sb.resolve = st.o.resolveInline
 	}
+	sb.colorLiterals = st.o.ColorLiterals
+	sb.richTokens = st.o.RichTokens
+	sb.interactiveTokens = st.o.hasInteractiveTokens()
 	sb.build(&pc.p, base)
 	return &pc.p
+}
+
+func (o *Options) hasInteractiveTokens() bool {
+	return o.OnTokenClick != nil || o.TokenPreview != nil || o.TokenMenu != nil
 }
 
 // resolvers says which of Resolve and CodeLink are set, as bits.
@@ -640,6 +672,9 @@ func (o *Options) linkColor(dest string) Color {
 // or not alike, and whether its links take the colors they did,
 // Options.LinkColor set or not alike.
 func (st *viewState) sameResolved(i int, p *para) bool {
+	if st.o.ColorLiterals != p.colorLiterals || st.o.RichTokens != p.richTokens || st.o.hasInteractiveTokens() != p.interactiveTokens {
+		return false
+	}
 	if (st.o.LinkColor != nil) != p.linkColor {
 		return false
 	}
@@ -678,7 +713,7 @@ func (st *viewState) paragraph(c *ui.Context, i int, base spanStyle) ui.Element 
 	switch {
 	case len(ps) == 0:
 		el = ui.Text(c, "")
-	case ps[0].link == -1:
+	case ps[0].link == -1 && ps[0].token == nil:
 		el = ui.RichText(c, ps[0].spans...)
 		ps = ps[1:]
 	default:
@@ -702,9 +737,27 @@ func (st *viewState) paragraph(c *ui.Context, i int, base spanStyle) ui.Element 
 	return el
 }
 
-// piece builds a link, or text after one, within a paragraph.
+// piece builds a link, an interactive enriched token, or text after one,
+// within a paragraph.
 func (st *viewState) piece(c *ui.Context, block int, pc *piece) {
 	switch {
+	case pc.link == -1 && pc.token != nil:
+		tok := *pc.token
+		el := ui.RichText(c, pc.spans...)
+		if st.o.OnTokenClick != nil {
+			el.Cursor(ui.CursorPointer)
+			if el.Clicked() {
+				st.o.OnTokenClick(c, tok)
+			}
+		}
+		if st.o.TokenMenu != nil && c.Preferences().Pointer != ui.PointerCoarse {
+			el.ContextMenu(func(m *ui.Menu) { st.o.TokenMenu(m, tok) })
+		}
+		if st.o.TokenPreview != nil {
+			if fill := st.o.TokenPreview(c, tok); fill != nil {
+				ui.TooltipBase(c, el, fill)
+			}
+		}
 	case pc.link == -1:
 		ui.RichText(c, pc.spans...)
 	case pc.link < -1:

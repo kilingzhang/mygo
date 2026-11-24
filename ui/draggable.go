@@ -27,6 +27,10 @@ type DraggableOptions struct {
 	// Snap, the element rests where the pointer lets it go. What Snap
 	// returns along an axis the element does not move along is ignored.
 	Snap func(Point) Point
+	// StartBounds, if set in the element's local coordinates, restricts dragging
+	// to pointer presses that begin inside it so taps, scrolling, and text
+	// selection on children outside or inside the edge zone pass through cleanly.
+	StartBounds *Rect
 	// Animation is how the element goes to rest, and to an offset the app
 	// sets: Smooth's spring when zero. A spring starts at the pointer's
 	// velocity as it lets go.
@@ -121,6 +125,10 @@ func (e *node) Draggable(offset *Point, o DraggableOptions) *node {
 	if r.bounded {
 		r.bounds = *o.Bounds
 	}
+	r.hasStart = o.StartBounds != nil
+	if r.hasStart {
+		r.startBounds = *o.StartBounds
+	}
 	e.flags |= flagDraggable
 	e.poseSet = true
 	r.advance(now)
@@ -133,9 +141,9 @@ func (e *node) Draggable(offset *Point, o DraggableOptions) *node {
 		}
 	}
 
-	held := st.pressedPrimary() && !e.disabled()
+	held := st.pressedPrimary() && !e.disabled() && st.dragAllowsPress()
 	// A press that began and ended since the last frame.
-	ended := !st.pressed && st.released
+	ended := !st.pressed && st.released && st.dragAllowsPress()
 	if !r.pressing && (held || ended) {
 		// The press holds the element where it shows.
 		r.pressing, r.caught, r.from = true, r.moving(), shown
@@ -247,16 +255,35 @@ type dragRec struct {
 	axes             Orientation
 	bounds           Rect
 	bounded, rigid   bool
+	startBounds      Rect
+	hasStart         bool
 	pressing, caught bool
 	from             Point
 	// own is the offset of a Draggable without one.
 	own Point
 }
 
+func (s *state) dragAllowsStart(x, y float32) bool {
+	if s == nil || s.dragRec == nil || !s.dragRec.hasStart {
+		return true
+	}
+	b := s.dragRec.startBounds
+	lx, ly := s.local(x, y)
+	return lx >= b.X && lx <= b.X+b.W && ly >= b.Y && ly <= b.Y+b.H
+}
+
+func (s *state) dragAllowsPress() bool {
+	if s == nil || s.dragRec == nil || !s.dragRec.hasStart {
+		return true
+	}
+	b := s.dragRec.startBounds
+	return s.pressX >= b.X && s.pressX <= b.X+b.W && s.pressY >= b.Y && s.pressY <= b.Y+b.H
+}
+
 // dragged reports whether the press of s dragged the element of r, as
 // Draggable moves it.
 func (r *dragRec) dragged(rt *engine, s *state) bool {
-	return r != nil && r.frame+1 >= rt.frame && s.drag.far && rt.pressButton == 0
+	return r != nil && r.frame+1 >= rt.frame && s.drag.far && rt.pressButton == 0 && s.dragAllowsPress()
 }
 
 // current reports whether the element of r was built with Draggable in

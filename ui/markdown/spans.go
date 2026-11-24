@@ -13,7 +13,8 @@ import (
 // span's text is in the source, for copying.
 
 // piece is a run of spans: a link's, when link >= 0 (an index into the
-// block's inlines), else plain text.
+// block's inlines), an interactive enriched token when token != nil, else
+// plain text.
 type piece struct {
 	link  int
 	spans []ui.Span
@@ -22,6 +23,7 @@ type piece struct {
 	// gave the link, none for Theme.Link.
 	dest  string
 	color Color
+	token *InlineToken
 }
 
 // runMark notes that the text of a paragraph from rune comes from the
@@ -59,8 +61,11 @@ type para struct {
 	// colored are the destinations of its links and the colors
 	// Options.LinkColor, which linkColor says was set, gave them: it
 	// builds anew when it answers otherwise.
-	colored   []coloredLink
-	linkColor bool
+	colored           []coloredLink
+	linkColor         bool
+	colorLiterals     bool
+	richTokens        bool
+	interactiveTokens bool
 	// width is the width of its text on one line, once measured.
 	width    float32
 	measured bool
@@ -71,10 +76,16 @@ type spanStyle struct {
 	weight              int
 	italic, strike      bool
 	underline           bool
+	dottedUnderline     bool
 	code                bool
+	kbd                 bool
 	sub                 bool
 	mark                bool
 	color               Color
+	bg                  Color
+	decoColor           Color
+	borderW             float32
+	borderColor         Color
 	size                float32
 	font                string
 	inLink, pendingLink bool
@@ -105,6 +116,13 @@ type spanBuilder struct {
 	// and CodeLink), and resolvers says which of those are set.
 	resolve   func(in parser.Inline) (string, bool)
 	resolvers uint8
+	// colorLiterals and richTokens enable enriched inline color swatches,
+	// keycaps, HTTP badges, timestamps, and cron tokens over dark/surface.
+	colorLiterals     bool
+	richTokens        bool
+	interactiveTokens bool
+	dark              bool
+	surface           Color
 }
 
 // coloredLink is the color Options.LinkColor gave a link to dest.
@@ -127,7 +145,7 @@ func (sb *spanBuilder) colorLink(dest string) Color {
 
 // build makes the paragraph of block i, of base style s.
 func (sb *spanBuilder) build(p *para, base spanStyle) {
-	*p = para{pieces: p.pieces[:0], marks: p.marks[:0], refs: p.refs[:0], resolved: p.resolved[:0], resolvers: sb.resolvers, colored: p.colored[:0], linkColor: sb.linkColor != nil}
+	*p = para{pieces: p.pieces[:0], marks: p.marks[:0], refs: p.refs[:0], resolved: p.resolved[:0], resolvers: sb.resolvers, colored: p.colored[:0], linkColor: sb.linkColor != nil, colorLiterals: sb.colorLiterals, richTokens: sb.richTokens, interactiveTokens: sb.interactiveTokens}
 	sb.p = p
 	sb.in = sb.d.Inlines(sb.block)
 	sb.html = sb.html[:0]
@@ -237,7 +255,7 @@ func entityAt(source string, i int, text string) int {
 
 func (sb *spanBuilder) addSpan(text string, src, end int, exact bool, s spanStyle, link int, alpha float32) {
 	th := sb.th
-	sp := ui.Span{Text: text, Font: th.Font, Size: th.FontSize, Weight: s.weight, Italic: s.italic, Strikethrough: s.strike, Underline: s.underline}
+	sp := ui.Span{Text: text, Font: th.Font, Size: th.FontSize, Weight: s.weight, Italic: s.italic, Strikethrough: s.strike, Underline: s.underline, DottedUnderline: s.dottedUnderline, DecorationColor: s.decoColor}
 	if s.size != 0 {
 		sp.Size = s.size
 	}
@@ -256,6 +274,28 @@ func (sb *spanBuilder) addSpan(text string, src, end int, exact bool, s spanStyl
 			sp.Color = th.Code
 		}
 	}
+	if s.kbd {
+		sp.Font = th.CodeFont
+		sp.Size = th.em(0.84)
+		if s.size != 0 {
+			sp.Size = s.size * 0.84
+		}
+		sp.Weight = max(sp.Weight, 500)
+		sp.PaddingX = max(4.0, sp.Size*0.34)
+		sp.PaddingY = 0.5
+		sp.Radius = max(4.0, sp.Size*0.32)
+		if sb.dark {
+			sp.Background = th.Text.Alpha(0.11)
+			sp.BorderColor = th.Text.Alpha(0.24)
+		} else {
+			sp.Background = th.Text.Alpha(0.055)
+			sp.BorderColor = th.Text.Alpha(0.22)
+		}
+		sp.BorderWidth = 0.9
+		if !s.inLink {
+			sp.Color = th.Text.Alpha(0.92)
+		}
+	}
 	if s.inLink && th.LinkWeight > s.weight {
 		sp.Weight = th.LinkWeight
 	}
@@ -264,6 +304,13 @@ func (sb *spanBuilder) addSpan(text string, src, end int, exact bool, s spanStyl
 	}
 	if s.mark {
 		sp.Background = th.Mark
+	}
+	if s.bg.A > 0 {
+		sp.Background = s.bg
+	}
+	if s.borderW > 0 && s.borderColor.A > 0 {
+		sp.BorderWidth = s.borderW
+		sp.BorderColor = s.borderColor
 	}
 	if s.color.A > 0 {
 		sp.Color = s.color
@@ -279,6 +326,8 @@ func (sb *spanBuilder) addSpan(text string, src, end int, exact bool, s spanStyl
 		}
 		sp.Color = sp.Color.Alpha(alpha)
 		sp.Background = sp.Background.Alpha(alpha)
+		sp.BorderColor = sp.BorderColor.Alpha(alpha)
+		sp.DecorationColor = sp.DecorationColor.Alpha(alpha)
 	}
 	if sb.fade != nil {
 		sb.p.fading = sb.p.fading || alpha < 1
@@ -310,7 +359,11 @@ func (sb *spanBuilder) inlines(from, to int, s spanStyle) {
 		switch n.Kind {
 		case parser.Text:
 			exact := n.End-n.Start == len(n.Text) && sb.d.Source()[n.Start:n.End] == n.Text
-			sb.addText(n, exact, sb.htmlStyle(s), link)
+			if sb.colorLiterals || sb.richTokens {
+				sb.addTextEnriched(n, exact, sb.htmlStyle(s), link)
+			} else {
+				sb.addText(n, exact, sb.htmlStyle(s), link)
+			}
 		case parser.SoftBreak:
 			sb.add(" ", n.Start, n.End, false, s, link)
 		case parser.LineBreak:
@@ -327,7 +380,14 @@ func (sb *spanBuilder) inlines(from, to int, s spanStyle) {
 			sb.p.refs = append(sb.p.refs, k)
 			sb.p.resolved = append(sb.p.resolved, dest)
 			if dest == "" || s.inLink {
-				sb.addText(n, exact, sb.htmlStyle(s), link)
+				hs := sb.htmlStyle(s)
+				if dest == "" && !s.inLink && sb.colorLiterals && n.Kind == parser.Reference && exact {
+					if col, ok := parseColorLiteral(n.Text, hs.code); ok {
+						sb.addColorToken(n.Text, n.Start, n.End, true, col, hs, link)
+						continue
+					}
+				}
+				sb.addText(n, exact, hs, link)
 				continue
 			}
 			c := sb.colorLink(dest)
@@ -357,6 +417,11 @@ func (sb *spanBuilder) inlines(from, to int, s spanStyle) {
 				sb.p.resolved = append(sb.p.resolved, dest)
 			}
 			if dest == "" || s.inLink {
+				if dest == "" && !s.inLink && (sb.colorLiterals || sb.richTokens) {
+					if sb.addCodeEnriched(n.Text, a, min(a+len(n.Text), z), z-a == len(n.Text), cs, link) {
+						continue
+					}
+				}
 				sb.add(n.Text, a, min(a+len(n.Text), z), z-a == len(n.Text), cs, link)
 				continue
 			}
@@ -547,10 +612,49 @@ func itoa(n int) string {
 	return string(b[i:])
 }
 
+// isHTMLCommentTag reports whether an inline HTML token is an HTML comment.
+func isHTMLCommentTag(tag string) bool {
+	if !strings.HasPrefix(tag, "<!--") {
+		return false
+	}
+	return tag == "<!-->" || tag == "<!--->" || (len(tag) >= 7 && strings.HasSuffix(tag, "-->"))
+}
+
+// isHTMLCommentBlock reports whether an HTML block consists solely of one or
+// more HTML comments (including an unclosed comment extending to end of block,
+// as while streaming).
+func isHTMLCommentBlock(raw string) bool {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return false
+	}
+	for s != "" {
+		if !strings.HasPrefix(s, "<!--") {
+			return false
+		}
+		switch {
+		case strings.HasPrefix(s, "<!-->"):
+			s = strings.TrimSpace(s[len("<!-->"):])
+		case strings.HasPrefix(s, "<!--->"):
+			s = strings.TrimSpace(s[len("<!--->"):])
+		default:
+			end := strings.Index(s[4:], "-->")
+			if end < 0 {
+				return true
+			}
+			s = strings.TrimSpace(s[4+end+3:])
+		}
+	}
+	return true
+}
+
 // inlineHTML applies the inline HTML tags of formatting language models
 // write, <b>, <i>, <code>, <br> and the like, and reports whether tag was
-// one: others show as text.
+// one: others show as text. HTML comments are consumed silently.
 func (sb *spanBuilder) inlineHTML(tag string) bool {
+	if isHTMLCommentTag(tag) {
+		return true
+	}
 	t := strings.ToLower(strings.Trim(tag, "<>/ \t\n"))
 	if i := strings.IndexAny(t, " \t\n"); i >= 0 {
 		t = t[:i]
@@ -589,8 +693,14 @@ func (sb *spanBuilder) htmlStyle(s spanStyle) spanStyle {
 			s.underline = true
 		case "s", "del", "strike":
 			s.strike = true
-		case "code", "kbd", "samp":
+		case "code", "samp":
 			s.code = true
+		case "kbd":
+			if sb.richTokens {
+				s.kbd = true
+			} else {
+				s.code = true
+			}
 		case "mark":
 			s.mark = true
 		case "sub", "sup", "small":

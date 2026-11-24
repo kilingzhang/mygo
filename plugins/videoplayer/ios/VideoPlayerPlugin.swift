@@ -8,6 +8,7 @@ private final class PlayerView: UIView {
     var id = 0
     var observers: [NSKeyValueObservation] = []
     var timeObserver: Any?
+    var endObserver: NSObjectProtocol?
     var ended = false
 
     func send() {
@@ -53,7 +54,7 @@ final class VideoPlayerPlugin: NSObject, MyGoPlugin {
             v.player.observe(\.rate) { [weak v] _, _ in v?.send() },
         ]
         v.timeObserver = v.player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 4), queue: .main) { [weak v] _ in v?.send() }
-        NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak v] _ in
+        v.endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak v] _ in
             guard let v else { return }
             if v.loop {
                 v.player.seek(to: .zero)
@@ -80,11 +81,16 @@ final class VideoPlayerPlugin: NSObject, MyGoPlugin {
             v.ended = false
             let ms = args["ms"] as? Double ?? Double(args["ms"] as? Int ?? 0)
             v.player.seek(to: CMTime(seconds: ms / 1000, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
-        case "volume": v.player.volume = Float(args["volume"] as? Double ?? 1)
+        case "volume":
+            let vol = Float(args["volume"] as? Double ?? 1)
+            v.player.volume = vol
+            v.player.isMuted = vol <= 0
         case "rate": v.player.rate = Float(args["rate"] as? Double ?? 1)
         case "dispose":
             v.player.pause()
             if let t = v.timeObserver { v.player.removeTimeObserver(t) }
+            if let o = v.endObserver { NotificationCenter.default.removeObserver(o) }
+            v.endObserver = nil
             v.observers = []
             views[id] = nil
         default:

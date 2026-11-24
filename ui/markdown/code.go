@@ -1,7 +1,10 @@
 package markdown
 
 import (
+	"slices"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/internal/l10n"
 	"github.com/egoist/mygo/ui"
@@ -39,22 +42,26 @@ func (b *CodeBlockView) SourceLine() int {
 // codeState is what a view keeps of a code block: the tokens of its lines
 // and the spans of its chunks of lines, to highlight only what changed.
 type codeState struct {
-	lang     string
-	tok      editor.Tokenizer
-	lines    []string
-	ends     []uint64
-	toks     [][]editor.Token
-	chunks   []codeChunk
-	copiedAt time.Time
-	seen     bool
+	lang          string
+	tok           editor.Tokenizer
+	lines         []string
+	ends          []uint64
+	toks          [][]editor.Token
+	chunks        []codeChunk
+	copiedAt      time.Time
+	seen          bool
+	colorLiterals bool
+	dark          bool
+	surface       Color
 }
 
 // codeChunk is chunkLines lines of a code block, laid out as one text, so
 // that a block growing as it streams lays out only its last chunk anew.
 type codeChunk struct {
-	spans []ui.Span
-	n     int // lines
-	ok    bool
+	spans   []ui.Span
+	objects []mathObject
+	n       int // lines
+	ok      bool
 }
 
 const chunkLines = 32
@@ -179,10 +186,40 @@ func (b *CodeBlockView) Body(c *ui.Context) ui.Element {
 				if !st.o.WrapCode {
 					el.NoWrap()
 				}
+				if objects := ch.objects; len(objects) > 0 {
+					el.DrawObjects(func(pa *ui.Painter, at int, r ui.Rect) {
+						if idx, ok := slices.BinarySearchFunc(objects, at, func(o mathObject, at int) int { return o.rune - at }); ok && objects[idx].draw != nil {
+							objects[idx].draw(pa, r)
+						}
+					})
+				}
 				st.note(el.ID(), b.Index, k*chunkLines)
 			}
 		})
 	})
+}
+
+type codeLineSwatch struct {
+	at   int
+	col  ui.Color
+	grad []ui.Color
+}
+
+func findLineColorSwatches(line string) []codeLineSwatch {
+	if !strings.ContainsAny(line, "#rRhHoOlLcC") {
+		return nil
+	}
+	var out []codeLineSwatch
+	pos := 0
+	for pos < len(line) {
+		a, z, col, grad, ok := findNextColorLiteral(line, pos)
+		if !ok {
+			break
+		}
+		out = append(out, codeLineSwatch{at: a, col: col, grad: grad})
+		pos = z
+	}
+	return out
 }
 
 // highlight tokenizes the lines of code block i that changed, and makes
@@ -190,6 +227,12 @@ func (b *CodeBlockView) Body(c *ui.Context) ui.Element {
 func (st *viewState) highlight(cs *codeState, i int) {
 	d := st.doc
 	n := d.LineCount(i)
+	if cs.colorLiterals != st.o.ColorLiterals || (st.o.ColorLiterals && (cs.dark != st.uiTh.Dark || cs.surface != st.uiTh.Background)) {
+		cs.chunks = cs.chunks[:0]
+		cs.colorLiterals = st.o.ColorLiterals
+		cs.dark = st.uiTh.Dark
+		cs.surface = st.uiTh.Background
+	}
 	// The first line that differs from those tokenized.
 	k0 := 0
 	for k0 < n && k0 < len(cs.lines) {
@@ -229,35 +272,87 @@ func (st *viewState) highlight(cs *codeState, i int) {
 		cs.chunks[k].ok = false
 	}
 	ct := st.th.CodeColors
+	codeSize := st.th.em(st.th.CodeSize)
+	dark := st.uiTh.Dark
+	borderBase := st.th.Text
 	for k := range cs.chunks {
 		ch := &cs.chunks[k]
 		if ch.ok {
 			continue
 		}
 		ch.spans = ch.spans[:0]
+		ch.objects = ch.objects[:0]
+		runePos := 0
+		emitSwatch := func(sw codeLineSwatch) {
+			h := max(float32(7.0), codeSize*0.64)
+			w := h
+			var drawFn func(*ui.Painter, ui.Rect)
+			if len(sw.grad) >= 2 {
+				w = h * 2.0
+				drawFn = makeGradientSwatchDraw(sw.grad, w, h, 0.5, dark, borderBase, 1)
+			} else {
+				drawFn = makeColorSwatchDraw(sw.col, h, 0.5, dark, borderBase, 1)
+			}
+			gap := max(float32(2.5), codeSize*0.22)
+			ch.objects = append(ch.objects, mathObject{rune: runePos, draw: drawFn})
+			ch.spans = append(ch.spans,
+				ui.Span{Text: "\uFFFC", Size: codeSize, ObjectWidth: 0.5 + w + gap, ObjectHeight: codeSize * 0.74, ObjectDescent: codeSize * 0.14},
+				ui.Span{Text: string(linkIconJoiner)},
+			)
+			runePos += 2
+		}
 		first := k * chunkLines
 		last := min(first+chunkLines, n)
 		for l := first; l < last; l++ {
 			if l > first {
 				ch.spans = append(ch.spans, ui.Span{Text: "\n"})
+				runePos++
 			}
 			line := cs.lines[l]
+			var swatches []codeLineSwatch
+			if st.o.ColorLiterals {
+				swatches = findLineColorSwatches(line)
+			}
+			swIdx := 0
+			emitSegment := func(segStart, segEnd int, sp ui.Span) {
+				cur := segStart
+				for swIdx < len(swatches) && swatches[swIdx].at < segEnd {
+					at := swatches[swIdx].at
+					if at > cur {
+						part := sp
+						part.Text = line[cur:at]
+						ch.spans = append(ch.spans, part)
+						runePos += utf8.RuneCountInString(part.Text)
+						cur = at
+					}
+					if at >= cur {
+						emitSwatch(swatches[swIdx])
+					}
+					swIdx++
+				}
+				if cur < segEnd {
+					part := sp
+					part.Text = line[cur:segEnd]
+					ch.spans = append(ch.spans, part)
+					runePos += utf8.RuneCountInString(part.Text)
+				}
+			}
 			start := 0
 			for _, t := range cs.toks[l] {
 				end := min(t.End, len(line))
 				if end > start {
-					sp := ui.Span{Text: line[start:end], Color: ct.TokenColor(t.Kind)}
+					sp := ui.Span{Color: ct.TokenColor(t.Kind)}
 					if s := ct.Tokens[t.Kind]; s.Bold {
 						sp.Weight = 600
 					} else if s.Italic {
 						sp.Italic = true
 					}
-					ch.spans = append(ch.spans, sp)
+					emitSegment(start, end, sp)
 				}
 				start = max(start, end)
 			}
 			if start < len(line) {
-				ch.spans = append(ch.spans, ui.Span{Text: line[start:], Color: ct.Text})
+				emitSegment(start, len(line), ui.Span{Color: ct.Text})
 			}
 		}
 		if len(ch.spans) == 0 {

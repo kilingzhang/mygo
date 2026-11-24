@@ -422,3 +422,84 @@ func TestRevealBySentence(t *testing.T) {
 		t.Errorf("done, shows %q", got)
 	}
 }
+
+func TestHTMLCommentsHidden(t *testing.T) {
+	t.Run("standalone and multiline comment blocks hidden without extra height", func(t *testing.T) {
+		plain := "Done.\n\nReady to install."
+		withComments := "Done.\n\n<!-- GOAL_COMPLETE -->\n\n<!-- multi\nline\ncomment -->\n\nReady to install.\n\n<!-- GOAL_CANCELLED -->"
+
+		var plainH, commentH ui.Handle
+		var pb, cb ui.Rect
+		ttPlain := ui.NewTester(func(c *ui.Context) {
+			View(c, plain, nil).Ref(&plainH)
+			pb = plainH.Bounds(c)
+		}, 480, 300)
+		ttPlain.Frame()
+		ttComment := ui.NewTester(func(c *ui.Context) {
+			View(c, withComments, nil).Ref(&commentH)
+			cb = commentH.Bounds(c)
+		}, 480, 300)
+		ttComment.Frame()
+
+		gotPlain := strings.Join(ttPlain.Texts(), "\n")
+		gotComment := strings.Join(ttComment.Texts(), "\n")
+		if gotComment != gotPlain {
+			t.Fatalf("rendered text mismatch:\ngot:  %q\nwant: %q", gotComment, gotPlain)
+		}
+		if strings.Contains(gotComment, "GOAL_COMPLETE") || strings.Contains(gotComment, "<!--") {
+			t.Fatalf("HTML comment leaked into rendered text: %q", gotComment)
+		}
+		if pb.H <= 0 || pb.H != cb.H {
+			t.Fatalf("hidden HTML comment block added height: plain=%v withComments=%v", pb.H, cb.H)
+		}
+	})
+
+	t.Run("unclosed streaming HTML comment block hidden", func(t *testing.T) {
+		tt := ui.NewTester(func(c *ui.Context) {
+			Stream(c, "Finished.\n\n<!-- GOAL_COM", &Options{Reveal: &Reveal{Unit: AtOnce}})
+		}, 480, 200)
+		got := strings.Join(tt.Texts(), "\n")
+		if got != "Finished." {
+			t.Fatalf("unclosed streaming comment leaked: %q", got)
+		}
+	})
+
+	t.Run("inline HTML comments hidden while code comments stay visible", func(t *testing.T) {
+		src := "Hello <!-- hidden -->world.\n\nKeep `<!-- inline code -->`.\n\n```html\n<!-- fenced code -->\n```"
+		tt := ui.NewTester(func(c *ui.Context) {
+			View(c, src, nil)
+		}, 480, 300)
+		got := strings.Join(tt.Texts(), "\n")
+		if strings.Contains(got, "hidden") {
+			t.Fatalf("inline HTML comment leaked: %q", got)
+		}
+		if !strings.Contains(got, "Hello world.") {
+			t.Fatalf("expected surrounding inline prose preserved, got %q", got)
+		}
+		if !strings.Contains(got, "<!-- inline code -->") || !strings.Contains(got, "<!-- fenced code -->") {
+			t.Fatalf("expected code comments preserved, got %q", got)
+		}
+	})
+
+	t.Run("non-comment HTML block and custom HTML hook preserved", func(t *testing.T) {
+		ttDefault := ui.NewTester(func(c *ui.Context) {
+			View(c, "<div>keep</div>", nil)
+		}, 480, 200)
+		if got := strings.Join(ttDefault.Texts(), "\n"); !strings.Contains(got, "<div>keep</div>") {
+			t.Fatalf("non-comment HTML block disappeared: %q", got)
+		}
+
+		sawCustom := ""
+		ttHook := ui.NewTester(func(c *ui.Context) {
+			View(c, "<!-- custom -->", &Options{
+				HTML: func(c *ui.Context, html string) {
+					sawCustom = html
+					ui.Text(c, "hooked")
+				},
+			})
+		}, 480, 200)
+		if sawCustom != "<!-- custom -->" || !strings.Contains(strings.Join(ttHook.Texts(), "\n"), "hooked") {
+			t.Fatalf("custom Options.HTML hook was bypassed: saw=%q texts=%v", sawCustom, ttHook.Texts())
+		}
+	})
+}

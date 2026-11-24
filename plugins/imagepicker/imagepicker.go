@@ -53,9 +53,20 @@ func Pick(ctx context.Context, o Options) ([]string, error) {
 // Capture shows the camera, for a photo, and returns the path of a JPEG of it
 // in the app's temporary directory, "" when the user went back.
 func Capture(ctx context.Context) (string, error) {
+	return CaptureWithOptions(ctx, Options{Kind: Images})
+}
+
+// CaptureWithOptions shows the camera configured for o.Kind (Images by default;
+// Any allows taking photos or recording videos on platforms whose system camera
+// supports both) and returns the path of the captured media in the app's
+// temporary directory, "" when the user went back.
+func CaptureWithOptions(ctx context.Context, o Options) (string, error) {
+	if o.Kind == "" {
+		o.Kind = Images
+	}
 	var r struct {
 		Path string `json:"path"`
 	}
-	err := mygo.Native(pluginID).Call(ctx, "capture", nil, &r)
+	err := mygo.Native(pluginID).Call(ctx, "capture", map[string]any{"kind": o.Kind}, &r)
 	return r.Path, err
 }

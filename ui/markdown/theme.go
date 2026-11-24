@@ -72,10 +72,15 @@ type Theme struct {
 	// its header row, and TableStripe that of every other row (none by
 	// default). TableCellPadding is the room in cells, in ems: 0.6 across
 	// and 0.4 down. TableMaxColumn is how wide a column grows before its
-	// cells wrap, in ems: 24.
+	// cells wrap, in ems: 24. TableRadius is the outer corner radius in
+	// DIPs (0.3em when zero). TableFillWidth stretches tables to fill the
+	// available width on wide containers and gently scales slightly-wide
+	// multi-column tables to avoid unnecessary horizontal scrollbars.
 	TableBorder, TableHeader, TableStripe Color
 	TableCellPadding                      [2]float32
 	TableMaxColumn                        float32
+	TableRadius                           float32
+	TableFillWidth                        bool
 
 	// Mark is the background of text marked with <mark>.
 	Mark Color

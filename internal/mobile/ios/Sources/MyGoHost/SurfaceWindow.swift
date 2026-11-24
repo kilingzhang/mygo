@@ -6,7 +6,7 @@
 import UIKit
 import QuartzCore
 
-final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate {
+final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate, UIEditMenuInteractionDelegate {
     private var link: CADisplayLink?
     private var fingers: [ObjectIdentifier: Int] = [:]
     private var nextFinger = 1
@@ -84,6 +84,7 @@ final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate
     private var wheelLast = CGPoint.zero
 
     @objc private func wheeled(_ g: UIPanGestureRecognizer) {
+        if editMenuVisible { dismissEditMenu() }
         if g.state == .began { wheelLast = .zero }
         let t = g.translation(in: self)
         let p = g.location(in: self)
@@ -125,9 +126,10 @@ final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate
     }
 
     override func close() {
+        dismissEditMenu(resignIfNotEditing: false)
         link?.invalidate()
         link = nil
-        if isFirstResponder { resignFirstResponder() }
+        if isFirstResponder { _ = resignFirstResponder() }
         super.close()
     }
 
@@ -225,6 +227,7 @@ final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate
         for h in held.reversed() where h.takes(p) {
             if let t = e?.timestamp, t != pressedAt {
                 pressedAt = t
+                if editMenuVisible { dismissEditMenu() }
                 Go.send(Event.viewPressed(id: id, x: Double(p.x), y: Double(p.y)))
             }
             return h.window.hitTest(convert(p, to: h.window), with: e) ?? h.window
@@ -257,6 +260,7 @@ final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate
     }
 
     override func touchesBegan(_ t: Set<UITouch>, with e: UIEvent?) {
+        if editMenuVisible { dismissEditMenu() }
         // A finger whose end UIKit never told of, as the view left the window
         // under it, would turn every later one into a pinch.
         if let all = e?.allTouches {
@@ -326,6 +330,13 @@ final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate
 
     override var canBecomeFirstResponder: Bool { true }
 
+    // A zero-height input view suppresses the software keyboard when this view
+    // becomes first responder solely to host UIEditMenuInteraction over
+    // non-editable (selectable) text.
+    private lazy var emptyInputView = UIView(frame: .zero)
+
+    override var inputView: UIView? { editing ? nil : emptyInputView }
+
     func setTextInput(_ c: SetTextInputCall) {
         let wasEditing = editing
         editing = c.active
@@ -336,16 +347,27 @@ final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate
         let traitsChanged = setTraits(c)
         let selChanged = c.selStart != selStart || c.selEnd != selEnd
         let textChanged = c.base != base || c.length != length || Array(c.text.utf16) != text || c.markStart != markStart
+        if editMenuVisible && ((wasEditing && !editing) || (editing && (another || textChanged))) {
+            dismissEditMenu(resignIfNotEditing: false)
+        }
         if textChanged { inputDelegate?.textWillChange(self) }
         if selChanged { inputDelegate?.selectionWillChange(self) }
         apply(text: c.text, base: c.base, length: c.length, selStart: c.selStart, selEnd: c.selEnd, markStart: c.markStart, markEnd: c.markEnd)
         if selChanged { inputDelegate?.selectionDidChange(self) }
         if textChanged { inputDelegate?.textDidChange(self) }
-        if editing && (!isFirstResponder || c.show != shows) {
-            becomeFirstResponder()
+        // Only present the keyboard on a fresh edit, a switch to another input,
+        // or an explicit ShowKeyboard request. Otherwise a layout/caret update
+        // while the keyboard is dismissing would bounce it right back open.
+        let wantKeyboard = !wasEditing || another || c.show != shows
+        if editing && wantKeyboard {
+            if !isFirstResponder {
+                _ = becomeFirstResponder()
+            } else if !wasEditing || traitsChanged || another {
+                reloadInputViews()
+            }
         } else if !editing && wasEditing && isFirstResponder {
-            resignFirstResponder()
-        } else if editing && (traitsChanged || another) {
+            _ = resignFirstResponder()
+        } else if editing && isFirstResponder && (traitsChanged || another) {
             reloadInputViews()
         }
         shows = c.show
@@ -425,16 +447,21 @@ final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate
     }
 
     override func resignFirstResponder() -> Bool {
+        dismissEditMenu(resignIfNotEditing: false)
         let r = super.resignFirstResponder()
-        if editing { Go.send(Event.textInputEnded(id: id)) }
+        if r && editing { Go.send(Event.textInputEnded(id: id)) }
         return r
     }
 
     var hasText: Bool { length > 0 }
 
-    func insertText(_ s: String) { edit(Event.textReplace(id: id, hasRange: false, start: 0, end: 0, text: s)) }
+    func insertText(_ s: String) {
+        if editMenuVisible { dismissEditMenu() }
+        edit(Event.textReplace(id: id, hasRange: false, start: 0, end: 0, text: s))
+    }
 
     func deleteBackward() {
+        if editMenuVisible { dismissEditMenu() }
         if markStart >= 0 {
             edit(Event.textMark(id: id, hasRange: false, start: 0, end: 0, text: "", selStart: 0, selEnd: 0))
             return
@@ -450,6 +477,7 @@ final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate
         get { Range(pos(selStart), pos(selEnd)) }
         set {
             guard let r = newValue as? Range, r.lo.i != selStart || r.hi.i != selEnd else { return }
+            if editMenuVisible { dismissEditMenu() }
             edit(Event.textSelect(id: id, start: r.lo.i, end: r.hi.i))
         }
     }
@@ -459,12 +487,16 @@ final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate
     var markedTextStyle: [NSAttributedString.Key: Any]?
 
     func setMarkedText(_ s: String?, selectedRange: NSRange) {
+        if editMenuVisible { dismissEditMenu() }
         let m = s ?? ""
         edit(Event.textMark(id: id, hasRange: false, start: 0, end: 0, text: m, selStart: selectedRange.location,
                             selEnd: selectedRange.location + selectedRange.length))
     }
 
-    func unmarkText() { edit(Event.textUnmark(id: id)) }
+    func unmarkText() {
+        if editMenuVisible { dismissEditMenu() }
+        edit(Event.textUnmark(id: id))
+    }
 
     var beginningOfDocument: UITextPosition { pos(0) }
     var endOfDocument: UITextPosition { pos(length) }
@@ -480,6 +512,7 @@ final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate
 
     func replace(_ range: UITextRange, withText s: String) {
         guard let r = range as? Range else { return }
+        if editMenuVisible { dismissEditMenu() }
         edit(Event.textReplace(id: id, hasRange: true, start: r.lo.i, end: r.hi.i, text: s))
     }
 
@@ -616,34 +649,80 @@ final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate
     // responder, what it can do, and calls it.
 
     private var menuActions: [String] = []
-    private lazy var editMenu: UIEditMenuInteraction = {
-        let i = UIEditMenuInteraction(delegate: nil)
+    private var editMenuInteraction: UIEditMenuInteraction?
+    private var editMenuVisible = false
+    private var editMenuSeq = 0
+
+    private func ensureEditMenu() -> UIEditMenuInteraction {
+        if let i = editMenuInteraction { return i }
+        let i = UIEditMenuInteraction(delegate: self)
         addInteraction(i)
+        editMenuInteraction = i
         return i
-    }()
+    }
+
+    private func dismissEditMenu(resignIfNotEditing: Bool = true) {
+        let wasVisible = editMenuVisible
+        menuActions = []
+        editMenuVisible = false
+        if wasVisible {
+            editMenuInteraction?.dismissMenu()
+        }
+        if resignIfNotEditing && !editing && isFirstResponder {
+            _ = resignFirstResponder()
+        }
+    }
+
+    private func canPasteFromPasteboard() -> Bool {
+        let pb = UIPasteboard.general
+        return pb.hasStrings || pb.hasImages || pb.hasURLs
+    }
 
     func showMenu(_ c: ShowMenuCall) {
-        menuActions = c.actions
-        if !isFirstResponder { becomeFirstResponder() }
-        let cfg = UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: c.x, y: c.y))
+        let actions = c.actions.filter { $0 != "paste" || canPasteFromPasteboard() }
+        if actions.isEmpty {
+            dismissEditMenu()
+            return
+        }
+        menuActions = actions
+        if !isFirstResponder { _ = becomeFirstResponder() }
+        editMenuSeq += 1
+        let cfg = UIEditMenuConfiguration(identifier: editMenuSeq as NSNumber, sourcePoint: CGPoint(x: c.x, y: c.y))
         cfg.preferredArrowDirection = .down
-        editMenu.presentEditMenu(with: cfg)
+        editMenuVisible = true
+        ensureEditMenu().presentEditMenu(with: cfg)
+    }
+
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction, willPresentMenuFor configuration: UIEditMenuConfiguration, animator: UIEditMenuInteractionAnimating) {
+        if (configuration.identifier as? Int) == editMenuSeq {
+            editMenuVisible = true
+        }
+    }
+
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction, willDismissMenuFor configuration: UIEditMenuConfiguration, animator: UIEditMenuInteractionAnimating) {
+        if (configuration.identifier as? Int) == editMenuSeq {
+            editMenuVisible = false
+            menuActions = []
+            if !editing && isFirstResponder {
+                _ = resignFirstResponder()
+            }
+        }
     }
 
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         switch action {
         case #selector(UIResponderStandardEditActions.cut(_:)): return menuActions.contains("cut")
         case #selector(UIResponderStandardEditActions.copy(_:)): return menuActions.contains("copy")
-        case #selector(UIResponderStandardEditActions.paste(_:)): return menuActions.contains("paste")
+        case #selector(UIResponderStandardEditActions.paste(_:)): return menuActions.contains("paste") && canPasteFromPasteboard()
         case #selector(UIResponderStandardEditActions.selectAll(_:)): return menuActions.contains("selectAll")
         default: return false
         }
     }
 
-    override func cut(_ sender: Any?) { edit(Event.textCommand(id: id, command: "cut")) }
-    override func copy(_ sender: Any?) { edit(Event.textCommand(id: id, command: "copy")) }
-    override func paste(_ sender: Any?) { edit(Event.textCommand(id: id, command: "paste")) }
-    override func selectAll(_ sender: Any?) { edit(Event.textCommand(id: id, command: "selectAll")) }
+    override func cut(_ sender: Any?) { dismissEditMenu(); edit(Event.textCommand(id: id, command: "cut")) }
+    override func copy(_ sender: Any?) { dismissEditMenu(); edit(Event.textCommand(id: id, command: "copy")) }
+    override func paste(_ sender: Any?) { dismissEditMenu(); edit(Event.textCommand(id: id, command: "paste")) }
+    override func selectAll(_ sender: Any?) { dismissEditMenu(); edit(Event.textCommand(id: id, command: "selectAll")) }
 
     // The system's magnifier, while a finger drags a handle.
 

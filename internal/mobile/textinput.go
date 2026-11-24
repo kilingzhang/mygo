@@ -293,8 +293,11 @@ func (b *Backend) textEvent(op uint64, r *wire.Reader, w *wire.Writer) {
 		}
 		reply.Encode(w)
 	case wire.EventTextInputEnded:
-		// The content keeps its selection and the focus as the keyboard goes,
-		// as UIKit's text fields do until the app ends editing.
+		var e wire.TextInputEndedEvent
+		e.Decode(r)
+		if s := sf(e.ID); s != nil {
+			s.send(platform.SurfaceEvent{Kind: platform.SurfaceTextInputEnded})
+		}
 	}
 }
 

@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/internal/platform"
 )
 
 // A finger pans what scrolls under it once it moves, and the press ends
@@ -713,4 +716,633 @@ func TestTouchReach(t *testing.T) {
 	if clicks != 1 {
 		t.Errorf("far from it: %d clicks", clicks)
 	}
+}
+
+type editMenuCall struct {
+	x, y    float64
+	actions []string
+}
+
+type recordingTouchSurface struct {
+	menus []editMenuCall
+}
+
+func (r *recordingTouchSurface) Haptic(string)             {}
+func (r *recordingTouchSurface) ShowMagnifier(x, y float64) {}
+func (r *recordingTouchSurface) HideMagnifier()            {}
+func (r *recordingTouchSurface) SetBackAvailable(bool)     {}
+func (r *recordingTouchSurface) ShowEditMenu(x, y float64, actions []string) {
+	r.menus = append(r.menus, editMenuCall{x: x, y: y, actions: slices.Clone(actions)})
+}
+
+func (r *recordingTouchSurface) open() bool {
+	return len(r.menus) > 0 && len(r.menus[len(r.menus)-1].actions) > 0
+}
+
+type touchMenuTestHost struct {
+	*headless
+	surface *recordingTouchSurface
+}
+
+func (h *touchMenuTestHost) touchSurface() platform.TouchSurface { return h.surface }
+
+// Tapping a KeepFocus button (such as a composer toolbar button or wrapper)
+// while a text input has focus must not open the text input's edit menu.
+// Tapping an already-focused text input opens the edit menu only near the
+// caret, toggles it closed on the next tap, and typing or long-press behaves
+// as expected.
+func TestTouchEditMenuLifecycle(t *testing.T) {
+	defer func(k overscroll) { overscrollKind = k }(overscrollKind)
+	overscrollKind = overscrollBounce
+	v := ""
+	sent := 0
+	var in, send *node
+	tt := coreNewTester(func(c *context) {
+		body := coreColumn(c).Fill().Padding(10).Gap(8)
+		body.Children(func() {
+			in = coreTextArea(c, &v).FillWidth().MinHeight(48).Height(48).Shrink(0)
+			if in.Focused() {
+				body.KeepFocus()
+			}
+			send = coreBox(c).Size(44, 44).Shrink(0)
+			if send.Clicked() {
+				sent++
+				v = ""
+			}
+		})
+	}, 360, 180)
+	rec := &recordingTouchSurface{}
+	tt.rt.host = &touchMenuTestHost{headless: tt.h, surface: rec}
+	tt.Frame()
+
+	sendX, sendY := send.st.x+send.st.w/2, send.st.y+send.st.h/2
+
+	// 1. First tap focuses the empty input without opening the edit menu.
+	tt.FingerDown(30, 30)
+	tt.FingerUp(30, 30)
+	tt.Frame()
+	if !in.Focused() {
+		t.Fatalf("input not focused after first tap")
+	}
+	if len(rec.menus) != 0 {
+		t.Fatalf("first tap opened edit menu: %+v", rec.menus)
+	}
+
+	// 2. Typing text and tapping a KeepFocus button (Send) inside the KeepFocus
+	// composer body must NOT pop up the Paste menu.
+	in.st.textAdapter.ReplaceText(nil, "hello world")
+	tt.Frame()
+	tt.Advance(time.Second)
+	tt.FingerDown(sendX, sendY)
+	tt.FingerUp(sendX, sendY)
+	tt.Frame()
+	if sent != 1 || !in.Focused() || v != "" {
+		t.Fatalf("send tap: sent=%d focused=%v draft=%q", sent, in.Focused(), v)
+	}
+	if len(rec.menus) != 0 {
+		t.Fatalf("KeepFocus button tap opened edit menu: %+v", rec.menus)
+	}
+
+	// 3. Tapping the empty input far to the right of the caret must NOT pop up
+	// the edit menu.
+	tt.Advance(time.Second)
+	tt.FingerDown(260, 30)
+	tt.FingerUp(260, 30)
+	tt.Frame()
+	if len(rec.menus) != 0 {
+		t.Fatalf("tap far from caret opened edit menu: %+v", rec.menus)
+	}
+
+	// 4. Tapping near the caret opens the edit menu ("paste").
+	caret, _, ok := in.st.textAdapter.BoundsForRange(platform.TextRange{})
+	if !ok {
+		t.Fatalf("no caret bounds for empty input")
+	}
+	cx, cy := float32(caret.X+4), float32(caret.Y+caret.H/2)
+	tt.Advance(time.Second)
+	tt.FingerDown(cx, cy)
+	tt.FingerUp(cx, cy)
+	tt.Frame()
+	if !rec.open() {
+		t.Fatalf("tap on caret did not open edit menu: %+v", rec.menus)
+	}
+
+	// 5. Tapping the caret again while the edit menu is open dismisses it and
+	// does NOT immediately re-open it.
+	tt.Advance(time.Second)
+	tt.FingerDown(cx, cy)
+	tt.FingerUp(cx, cy)
+	tt.Frame()
+	if rec.open() {
+		t.Fatalf("second tap on caret re-opened edit menu instead of dismissing: %+v", rec.menus)
+	}
+
+	// 6. Opening again and starting IME composition (SetMarkedText) dismisses
+	// the edit menu.
+	tt.Advance(time.Second)
+	tt.FingerDown(cx, cy)
+	tt.FingerUp(cx, cy)
+	tt.Frame()
+	if !rec.open() {
+		t.Fatalf("expected edit menu open before IME composition: %+v", rec.menus)
+	}
+	in.st.textAdapter.SetMarkedText(nil, "ni", platform.TextRange{Start: 2, End: 2})
+	if rec.open() {
+		t.Fatalf("SetMarkedText did not dismiss edit menu: %+v", rec.menus)
+	}
+
+	// 7. Long-pressing anywhere in the empty input still opens the edit menu,
+	// and tapping the KeepFocus button dismisses it without re-opening.
+	in.st.textAdapter.UnmarkText()
+	v = ""
+	tt.Frame()
+	tt.Advance(time.Second)
+	tt.FingerDown(240, 30)
+	tt.Advance(longPressDelay + 100*time.Millisecond)
+	tt.FingerUp(240, 30)
+	tt.Frame()
+	if !rec.open() {
+		t.Fatalf("long press in empty input did not open edit menu: %+v", rec.menus)
+	}
+	tt.Advance(time.Second)
+	tt.FingerDown(sendX, sendY)
+	tt.FingerUp(sendX, sendY)
+	tt.Frame()
+	if rec.open() {
+		t.Fatalf("tapping KeepFocus button kept or re-opened edit menu: %+v", rec.menus)
+	}
+
+	// 8. Tapping the focused text input inside a KeepFocus container still
+	// increments ShowKeyboard so the soft keyboard can be brought back up,
+	// while tapping a KeepFocus sibling button does not.
+	showBefore := tt.h.ime.ShowKeyboard
+	tt.Advance(time.Second)
+	tt.FingerDown(sendX, sendY)
+	tt.FingerUp(sendX, sendY)
+	tt.Frame()
+	if tt.h.ime.ShowKeyboard != showBefore {
+		t.Fatalf("KeepFocus button tap incremented ShowKeyboard from %d to %d", showBefore, tt.h.ime.ShowKeyboard)
+	}
+	tt.Advance(time.Second)
+	tt.FingerDown(200, 30)
+	tt.FingerUp(200, 30)
+	tt.Frame()
+	if tt.h.ime.ShowKeyboard != showBefore+1 {
+		t.Fatalf("tapping focused text input inside KeepFocus did not increment ShowKeyboard: got %d want %d", tt.h.ime.ShowKeyboard, showBefore+1)
+	}
+
+	// 9. System keyboard dismissal (SurfaceTextInputEnded) blurs the text
+	// input, hides any open edit menu, deactivates TextInputState, and preserves
+	// the draft so tapping again focuses cleanly without bouncing.
+	in.st.textAdapter.ReplaceText(nil, "draft kept")
+	tt.Frame()
+	tt.Advance(time.Second)
+	tt.FingerDown(240, 30)
+	tt.Advance(longPressDelay + 100*time.Millisecond)
+	tt.FingerUp(240, 30)
+	tt.Frame()
+	if !rec.open() || !tt.h.ime.Active {
+		t.Fatalf("expected active input and open edit menu before SurfaceTextInputEnded: open=%v active=%v", rec.open(), tt.h.ime.Active)
+	}
+	tt.rt.event(platform.SurfaceEvent{Kind: platform.SurfaceTextInputEnded})
+	tt.Frame()
+	if in.Focused() || tt.h.ime.Active || rec.open() || v != "draft kept" {
+		t.Fatalf("after SurfaceTextInputEnded: focused=%v active=%v menuOpen=%v draft=%q", in.Focused(), tt.h.ime.Active, rec.open(), v)
+	}
+}
+
+func TestTouchSelectableContainerHandlesAndHoldDrag(t *testing.T) {
+	defer func(k overscroll) { overscrollKind = k }(overscrollKind)
+	overscrollKind = overscrollBounce
+
+	var scroll ScrollState
+	var notifyCount int
+	var lastParts []SelectedText
+	tt := coreNewTester(func(c *context) {
+		coreScroll(c).Fill().TrackScroll(&scroll).Children(func() {
+			col := coreColumn(c).FillWidth().Padding(12).Gap(10).Selectable()
+			col.OnSelectionChange(func(parts []SelectedText) {
+				notifyCount++
+				lastParts = slices.Clone(parts)
+			})
+			col.Children(func() {
+				coreText(c, "Alpha beta gamma delta").FillWidth()
+				coreText(c, "Second line epsilon zeta").FillWidth()
+				coreText(c, "Third paragraph omega theta").FillWidth()
+				for i := range 20 {
+					coreText(c, "Scrollable filler line "+string(rune('A'+i%26))+" tail").FillWidth()
+				}
+			})
+		})
+	}, 320, 200)
+	rec := &recordingTouchSurface{}
+	tt.rt.host = &touchMenuTestHost{headless: tt.h, surface: rec}
+	tt.Frame()
+	tt.Frame()
+
+	// 1. Long-press on "Alpha" selects the word, shows both handles, and opens
+	// the edit menu with copy + selectAll (no cut/paste) on lift.
+	x1, y1 := selectableAt(t, tt, "Alpha beta gamma delta", 2)
+	tt.FingerDown(x1, y1)
+	tt.Advance(longPressDelay + 50*time.Millisecond)
+	tt.Frame()
+	h, ok := tt.rt.selectionHandles()
+	if !ok || h.kind != touchSelScope || !h.hasStart || !h.hasEnd {
+		t.Fatalf("expected scope selection handles immediately after long press, ok=%v h=%+v", ok, h)
+	}
+	tt.FingerUp(x1, y1)
+	tt.Frame()
+	if !rec.open() {
+		t.Fatalf("expected edit menu open after long press release: %+v", rec.menus)
+	}
+	gotActions := rec.menus[len(rec.menus)-1].actions
+	if !slices.Contains(gotActions, "copy") || !slices.Contains(gotActions, "selectAll") || slices.Contains(gotActions, "cut") || slices.Contains(gotActions, "paste") {
+		t.Fatalf("unexpected read-only edit menu actions: %v", gotActions)
+	}
+	tt.Key(Cmd, KeyC)
+	if got := tt.Clipboard(); got != "Alpha" {
+		t.Fatalf("long press selected %q, want %q", got, "Alpha")
+	}
+
+	// 2. Drag the end handle down into the second paragraph.
+	h, ok = tt.rt.selectionHandles()
+	if !ok || !h.hasEnd {
+		t.Fatalf("missing end handle before drag")
+	}
+	endX, endY := h.end.X, h.end.Y+h.end.H+4
+	x2, y2 := selectableAt(t, tt, "Second line epsilon zeta", 15)
+	dragY2 := y2 + 12 // bottom knob position for paragraph 2
+	beforeNotify := notifyCount
+	tt.FingerDown(endX, endY)
+	if tt.rt.touchText.held != handleEnd {
+		t.Fatalf("expected handleEnd grabbed near bottom knob, got %d", tt.rt.touchText.held)
+	}
+	tt.FingerMove(x2, dragY2)
+	tt.Frame()
+	if notifyCount != beforeNotify {
+		t.Fatalf("OnSelectionChange fired mid-handle-drag (%d -> %d)", beforeNotify, notifyCount)
+	}
+	tt.FingerUp(x2, dragY2)
+	tt.Frame()
+	if notifyCount <= beforeNotify || len(lastParts) < 2 {
+		t.Fatalf("expected cross-paragraph OnSelectionChange on release: notify=%d parts=%+v", notifyCount, lastParts)
+	}
+	tt.Key(Cmd, KeyC)
+	if got := tt.Clipboard(); !containsSubstr(got, "Alpha") || !containsSubstr(got, "Second line") {
+		t.Fatalf("cross-paragraph handle drag selected %q", got)
+	}
+
+	// 3. Drag the start handle past the end handle (smooth crossing -> flips to handleEnd).
+	h, ok = tt.rt.selectionHandles()
+	if !ok || !h.hasStart {
+		t.Fatalf("missing start handle before cross drag")
+	}
+	startX, startY := h.start.X, h.start.Y-4
+	x3, y3 := selectableAt(t, tt, "Third paragraph omega theta", 18)
+	tt.FingerDown(startX, startY)
+	if tt.rt.touchText.held != handleStart {
+		t.Fatalf("expected handleStart grabbed near top knob, got %d", tt.rt.touchText.held)
+	}
+	tt.FingerMove(x3, y3)
+	tt.Frame()
+	if tt.rt.touchText.held != handleEnd {
+		t.Fatalf("expected start handle crossing past end to flip to handleEnd, got %d", tt.rt.touchText.held)
+	}
+	tt.FingerUp(x3, y3)
+	tt.Frame()
+	tt.Key(Cmd, KeyC)
+	if got := tt.Clipboard(); len(got) == 0 || !containsSubstr(got, "Third") {
+		t.Fatalf("crossing handle drag failed to extend into third paragraph: %q", got)
+	}
+
+	// 4. Edge auto-scroll while dragging end handle to the bottom of the scroll viewport.
+	h, ok = tt.rt.selectionHandles()
+	if !ok || !h.hasEnd {
+		t.Fatalf("missing end handle before auto-scroll drag")
+	}
+	scrollBefore := scroll.Y
+	tt.FingerDown(h.end.X, h.end.Y+h.end.H+4)
+	tt.FingerMove(120, 192)
+	for range 12 {
+		tt.Advance(24 * time.Millisecond)
+		tt.Frame()
+	}
+	tt.FingerUp(120, 192)
+	tt.Frame()
+	if scroll.Y <= scrollBefore+20 {
+		t.Fatalf("expected edge auto-scroll during handle drag: before=%.1f after=%.1f", scrollBefore, scroll.Y)
+	}
+	tt.Key(Cmd, KeyC)
+	if got := tt.Clipboard(); !containsSubstr(got, "Scrollable filler line") {
+		t.Fatalf("expected auto-scroll handle drag to extend into scrolled paragraphs, got %q", got)
+	}
+
+	// 5. Reset scroll to top, tap to clear selection, then long-press + hold-and-drag
+	// WITHOUT lifting to immediately expand selection across paragraphs.
+	scroll.Y = 0
+	tt.Frame()
+	tt.Frame()
+	tt.Advance(time.Second)
+	tt.FingerDown(10, 10)
+	tt.FingerUp(10, 10)
+	tt.Frame()
+	if _, ok := tt.rt.selectionHandles(); ok {
+		t.Fatalf("expected tap outside handles to clear selection")
+	}
+
+	x1, y1 = selectableAt(t, tt, "Alpha beta gamma delta", 2)
+	x2, y2 = selectableAt(t, tt, "Second line epsilon zeta", 12)
+	tt.Advance(time.Second)
+	tt.FingerDown(x1, y1)
+	tt.Advance(longPressDelay + 50*time.Millisecond)
+	tt.Frame()
+	tt.FingerMove(x2, y2)
+	tt.Frame()
+	tt.FingerUp(x2, y2)
+	tt.Frame()
+	tt.Key(Cmd, KeyC)
+	if got := tt.Clipboard(); !containsSubstr(got, "Alpha") || !containsSubstr(got, "Second") {
+		t.Fatalf("hold-and-drag after long press failed: got %q", got)
+	}
+
+	// 6. Sub-slop thumb jitter after pressDelay followed by vertical pan must scroll
+	// cleanly without leaving an accidental text selection.
+	tt.Advance(time.Second)
+	tt.FingerDown(10, 10)
+	tt.FingerUp(10, 10)
+	tt.Frame()
+	tt.Advance(time.Second)
+	x1, y1 = selectableAt(t, tt, "Second line epsilon zeta", 5)
+	tt.FingerDown(x1, y1)
+	tt.Advance(pressDelay + 20*time.Millisecond)
+	tt.Frame()
+	tt.FingerMove(x1+4, y1-2) // within touchSlop
+	tt.Frame()
+	tt.Advance(16 * time.Millisecond)
+	tt.FingerMove(x1+4, y1-20) // crosses touchSlop -> starts pan
+	tt.Frame()
+	tt.Advance(16 * time.Millisecond)
+	tt.FingerMove(x1+4, y1-80) // vertical pan
+	tt.Frame()
+	tt.FingerUp(x1+4, y1-80)
+	tt.Frame()
+	if scroll.Y <= 10 {
+		t.Fatalf("expected vertical pan to scroll, got Y=%.1f", scroll.Y)
+	}
+	if _, _, selected := tt.rt.textSelectionBounds(); selected {
+		t.Fatalf("sub-slop jitter before pan left accidental text selection")
+	}
+}
+
+func TestTouchStandaloneSelectableHandles(t *testing.T) {
+	defer func(k overscroll) { overscrollKind = k }(overscrollKind)
+	overscrollKind = overscrollBounce
+
+	tt := coreNewTester(func(c *context) {
+		coreColumn(c).Fill().Padding(16).Children(func() {
+			coreText(c, "Standalone alpha beta gamma").Selectable()
+		})
+	}, 320, 120)
+	tt.Frame()
+	tt.Frame()
+
+	x1, y1 := selectableAt(t, tt, "Standalone alpha beta gamma", 2)
+	x2, y2 := selectableAt(t, tt, "Standalone alpha beta gamma", 22)
+	tt.FingerDown(x1, y1)
+	tt.Advance(longPressDelay + 50*time.Millisecond)
+	tt.FingerUp(x1, y1)
+	tt.Frame()
+	h, ok := tt.rt.selectionHandles()
+	if !ok || h.kind != touchSelReadOnly || !h.hasStart || !h.hasEnd {
+		t.Fatalf("expected standalone read-only selection handles, ok=%v h=%+v", ok, h)
+	}
+	tt.FingerDown(h.end.X, h.end.Y+h.end.H+4)
+	if tt.rt.touchText.held != handleEnd {
+		t.Fatalf("expected handleEnd on standalone text, got %d", tt.rt.touchText.held)
+	}
+	tt.FingerMove(x2, y2)
+	tt.Frame()
+	tt.FingerUp(x2, y2)
+	tt.Frame()
+	tt.Key(Cmd, KeyC)
+	if got := tt.Clipboard(); !containsSubstr(got, "Standalone alpha") {
+		t.Fatalf("standalone handle drag copied %q", got)
+	}
+}
+
+func TestTouchDraggableStartBoundsPreservesSelectionAndScroll(t *testing.T) {
+	defer func(k overscroll) { overscrollKind = k }(overscrollKind)
+	overscrollKind = overscrollBounce
+
+	var off Point
+	var scroll ScrollState
+	tt := coreNewTester(func(c *context) {
+		host := coreBox(c).Fill()
+		host.Draggable(&off, DraggableOptions{
+			Axis:        Horizontal,
+			Bounds:      &Rect{W: 320},
+			Rigid:       true,
+			StartBounds: &Rect{X: 0, Y: 0, W: 28, H: 400},
+		})
+		host.Children(func() {
+			coreScroll(c).Fill().TrackScroll(&scroll).Children(func() {
+				coreColumn(c).FillWidth().Padding(14).Gap(8).Selectable().Children(func() {
+					coreText(c, "First word at left edge").FillWidth()
+					coreBox(c).Height(600).Shrink(0)
+				})
+			})
+		})
+	}, 320, 240)
+	tt.Frame()
+	tt.Frame()
+
+	// 1. Long-press inside the left-edge StartBounds (x=20) still selects text.
+	x1, y1 := selectableAt(t, tt, "First word at left edge", 1)
+	if x1 > 28 {
+		x1 = 20
+	}
+	tt.FingerDown(x1, y1)
+	tt.Advance(longPressDelay + 50*time.Millisecond)
+	tt.FingerUp(x1, y1)
+	tt.Frame()
+	tt.Key(Cmd, KeyC)
+	if got := tt.Clipboard(); got != "First" {
+		t.Fatalf("long press inside StartBounds selected %q, want %q", got, "First")
+	}
+
+	// 2. Horizontal swipe starting outside StartBounds (x=100) must NOT drag host.
+	tt.Advance(time.Second)
+	tt.FingerDown(100, 120)
+	tt.Advance(16 * time.Millisecond)
+	tt.FingerMove(130, 120)
+	tt.Frame()
+	tt.Advance(16 * time.Millisecond)
+	tt.FingerMove(220, 120)
+	tt.Frame()
+	tt.FingerUp(220, 120)
+	tt.Frame()
+	if off.X != 0 {
+		t.Fatalf("horizontal swipe outside StartBounds dragged to %v", off.X)
+	}
+
+	// 3. Horizontal swipe starting inside StartBounds (x=20) drags host 1:1.
+	tt.Advance(time.Second)
+	tt.FingerDown(20, 120)
+	tt.Advance(16 * time.Millisecond)
+	tt.FingerMove(50, 120)
+	tt.Frame()
+	tt.Advance(16 * time.Millisecond)
+	tt.FingerMove(160, 120)
+	tt.Frame()
+	if off.X <= 80 {
+		t.Fatalf("horizontal swipe inside StartBounds failed to track 1:1, off=%+v", off)
+	}
+	tt.FingerUp(160, 120)
+	tt.Frame()
+}
+
+// A left-edge StartBounds Draggable over non-scrollable content (or after
+// pressDelay expires on scrollable content) presses the host directly on
+// PointerDown. As the host translates right frame-by-frame, subsequent moves
+// must stay locked to the drag instead of re-checking StartBounds against the
+// shifted local coordinates and canceling the press after ~x0 DIPs.
+func TestTouchDraggableStartBoundsDirectPressFrameByFrame(t *testing.T) {
+	defer func(k overscroll) { overscrollKind = k }(overscrollKind)
+	overscrollKind = overscrollBounce
+
+	const w = float32(393)
+	var off Point
+	var scroll ScrollState
+	tt := coreNewTester(func(c *context) {
+		host := coreBox(c).Fill()
+		host.Draggable(&off, DraggableOptions{
+			Axis:        Horizontal,
+			Bounds:      &Rect{W: w},
+			Rigid:       true,
+			StartBounds: &Rect{X: 0, Y: 44, W: 28, H: 1000},
+			Snap:        Nearest(Point{}, Point{X: w}),
+		})
+		host.Children(func() {
+			// Short non-overflowing scroll container (contentH < viewportH),
+			// matching a chat with only 1-2 messages.
+			coreScroll(c).Fill().TrackScroll(&scroll).Children(func() {
+				coreColumn(c).FillWidth().Padding(14).Gap(8).Children(func() {
+					coreBox(c).FillWidth().Height(80).Shrink(0)
+				})
+			})
+		})
+	}, int(w), 600)
+	tt.Frame()
+	tt.Frame()
+
+	// 1. Frame-by-frame left-edge swipe right (starting at x=14) must track 1:1
+	//    past x=14..28 all the way across the viewport and snap to w on release.
+	tt.FingerDown(14, 300)
+	tt.Frame()
+	for _, pt := range [][2]float32{
+		{24, 300},
+		{36, 301},
+		{52, 304},
+		{80, 312},
+		{140, 325},
+		{220, 340},
+		{260, 345},
+	} {
+		tt.Advance(16 * time.Millisecond)
+		tt.FingerMove(pt[0], pt[1])
+		tt.Frame()
+	}
+	if off.X < 200 {
+		t.Fatalf("frame-by-frame left-edge drag snapped back or stalled: off=%+v, want X >= 200", off)
+	}
+	tt.FingerUp(260, 345)
+	tt.Frame()
+	for range 30 {
+		tt.Advance(16 * time.Millisecond)
+	}
+	tt.Frame()
+	if off.X < w*0.95 {
+		t.Fatalf("left-edge drag failed to snap to %v on release: off=%+v", w, off)
+	}
+
+	// Reset and verify starting outside StartBounds (x=100) still does NOT drag.
+	off = Point{}
+	tt.Frame()
+	tt.Advance(time.Second)
+	tt.FingerDown(100, 300)
+	tt.Frame()
+	for _, x := range []float32{120, 160, 220, 280} {
+		tt.Advance(16 * time.Millisecond)
+		tt.FingerMove(x, 300)
+		tt.Frame()
+	}
+	if off.X != 0 {
+		t.Fatalf("drag outside StartBounds unexpectedly moved host: off=%+v", off)
+	}
+	tt.FingerUp(280, 300)
+	tt.Frame()
+
+	// 3. Starting very close to the edge (x=3) where a small pre-slop move (<8 DIPs
+	//    but >= dragStart=4) translates the host before touchSlop is crossed.
+	tt.Advance(time.Second)
+	tt.FingerDown(3, 300)
+	tt.Frame()
+	for _, x := range []float32{8, 16, 40, 120, 240} {
+		tt.Advance(16 * time.Millisecond)
+		tt.FingerMove(x, 300)
+		tt.Frame()
+	}
+	if off.X < 200 {
+		t.Fatalf("near-edge (x=3) drag failed to track 1:1: off=%+v", off)
+	}
+	tt.FingerUp(240, 300)
+	tt.Frame()
+
+	// 4. Scrollable content where the finger pauses past pressDelay (>100ms)
+	//    before swiping right (so pressNow presses host directly): frame-by-frame
+	//    drag must still track 1:1 all the way across.
+	var scrollOff Point
+	var longScroll ScrollState
+	ttLong := coreNewTester(func(c *context) {
+		host := coreBox(c).Fill()
+		host.Draggable(&scrollOff, DraggableOptions{
+			Axis:        Horizontal,
+			Bounds:      &Rect{W: w},
+			Rigid:       true,
+			StartBounds: &Rect{X: 0, Y: 44, W: 28, H: 1000},
+			Snap:        Nearest(Point{}, Point{X: w}),
+		})
+		host.Children(func() {
+			coreScroll(c).Fill().TrackScroll(&longScroll).Children(func() {
+				coreBox(c).FillWidth().Height(1400).Shrink(0)
+			})
+		})
+	}, int(w), 600)
+	ttLong.Frame()
+	ttLong.Frame()
+	ttLong.FingerDown(14, 300)
+	ttLong.Advance(pressDelay + 20*time.Millisecond)
+	ttLong.Frame()
+	for _, x := range []float32{24, 40, 70, 140, 240} {
+		ttLong.Advance(16 * time.Millisecond)
+		ttLong.FingerMove(x, 300)
+		ttLong.Frame()
+	}
+	if scrollOff.X < 200 {
+		t.Fatalf("post-pressDelay left-edge drag on scrollable content snapped back: off=%+v", scrollOff)
+	}
+	ttLong.FingerUp(240, 300)
+	ttLong.Frame()
+}
+
+func containsSubstr(s, sub string) bool {
+	if len(sub) == 0 {
+		return true
+	}
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }

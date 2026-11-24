@@ -71,7 +71,7 @@ func (st *viewState) image(c *ui.Context, url string) ui.ImageSource {
 func (st *viewState) images(c *ui.Context, i int) ui.Element {
 	th := &st.th
 	in := st.doc.Inlines(i)
-	row := ui.Row(c).Wrap().Gap(th.em(0.5)).AlignSelf(ui.Stretch)
+	row := ui.Row(c).Wrap().Gap(th.em(0.5)).AlignSelf(ui.Stretch).Justify(ui.Center)
 	return row.Children(func() {
 		for k := 0; k < len(in); k = in[k].Next {
 			n := &in[k]

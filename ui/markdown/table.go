@@ -62,8 +62,49 @@ func (st *viewState) table(c *ui.Context, i int, base spanStyle) ui.Element {
 	}
 	ts.widths = append(ts.widths[:0], widths...)
 	scroll := ui.ScrollHorizontal(c).AlignSelf(ui.Stretch)
+	if th.TableFillWidth && cols > 0 {
+		if availW := scroll.LayoutBounds().W; availW >= 520 {
+			targetW := availW - 2
+			var totalW float32
+			for _, w := range widths {
+				totalW += w
+			}
+			if totalW > 0 && totalW < targetW-1 {
+				extra := targetW - totalW
+				for k := range widths {
+					widths[k] += extra * (widths[k] / totalW)
+				}
+			} else if cols >= 2 && totalW > targetW+1 && totalW <= targetW*1.35 {
+				scale := targetW / totalW
+				minCol := max(float32(96), 2*padX+48)
+				fits := true
+				scaled := make([]float32, cols)
+				for k, w := range widths {
+					sw := w * scale
+					if sw < minCol && w >= minCol {
+						sw = minCol
+					}
+					scaled[k] = sw
+				}
+				var sumScaled float32
+				for _, sw := range scaled {
+					sumScaled += sw
+				}
+				if sumScaled > targetW+2 {
+					fits = false
+				}
+				if fits {
+					widths = scaled
+				}
+			}
+		}
+	}
+	rad := th.TableRadius
+	if rad <= 0 {
+		rad = th.em(0.3)
+	}
 	return scroll.Children(func() {
-		grid := ui.Column(c).Border(1, th.TableBorder).Radius(th.em(0.3)).Clip().Shrink(0).Role(ui.RoleTable)
+		grid := ui.Column(c).Border(1, th.TableBorder).Radius(rad).Clip().Shrink(0).Role(ui.RoleTable)
 		grid.Children(func() {
 			n := 0
 			for r := i + 1; r < d.Block(i).Next; r = d.Block(r).Next {

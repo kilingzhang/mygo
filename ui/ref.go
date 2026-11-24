@@ -227,6 +227,8 @@ func (rt *engine) applyFocusRequests() {
 		if rt.focused != b.id {
 			n.Focus(opts)
 			rt.consumed = true
+		} else if s := rt.states[b.id]; s != nil && s.textClient != nil {
+			rt.ime.show++
 		}
 		if b.selectAll {
 			b.selectAll = false

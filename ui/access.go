@@ -1071,7 +1071,7 @@ func (rt *engine) accessDetails(e *node, n *platform.AccessNode) {
 	}
 	// Custom text clients without an editor take set-value here; inputs and
 	// text areas with an editor follow the editor branch above.
-	if e.textClient != nil && (e.st == nil || e.st.editor == nil || e.flags&flagEditable == 0) && n.States&platform.AccessReadOnly == 0 {
+	if e.textClient != nil && !textClientReadOnly(e.textClient) && (e.st == nil || e.st.editor == nil || e.flags&flagEditable == 0) && n.States&platform.AccessReadOnly == 0 {
 		n.Actions |= platform.ActionSetValue
 	}
 	if readOnly {
@@ -1271,7 +1271,7 @@ func (rt *engine) accessAction(ev platform.SurfaceEvent) {
 			s.input(InputEvent{Kind: InputSelect, Start: ev.From, End: ev.To, Time: rt.now()})
 		}
 	case platform.AccessSetValue:
-		if s.textClient != nil && (s.editor == nil || s.flags&flagEditable == 0) {
+		if s.textClient != nil && !s.textClientReadOnly() && (s.editor == nil || s.flags&flagEditable == 0) {
 			rt.focusOn(s)
 			_, span := s.textClient.TextForRange(TextInputRange{End: int(^uint(0) >> 1)})
 			s.textClient.ReplaceText(&span, ev.Text)
@@ -1283,7 +1283,7 @@ func (rt *engine) accessAction(ev platform.SurfaceEvent) {
 		rt.focusOn(s)
 		s.editor.queue = append(s.editor.queue, editEvent{kind: editCommand, text: "selectAll"}, editEvent{kind: editInsert, text: ev.Text})
 	case platform.AccessInsertText:
-		if s.textClient != nil && (s.editor == nil || s.flags&flagEditable == 0) {
+		if s.textClient != nil && !s.textClientReadOnly() && (s.editor == nil || s.flags&flagEditable == 0) {
 			rt.focusOn(s)
 			s.textClient.ReplaceText(nil, ev.Text)
 			break

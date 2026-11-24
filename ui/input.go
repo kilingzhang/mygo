@@ -134,12 +134,14 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 			rt.requestFrame()
 		}
 	case platform.PointerScroll:
+		rt.hideEditMenu()
 		rt.pointerMove(x, y)
 		taken = rt.scroll(float32(ev.DX), float32(ev.DY), Modifiers(ev.Mods), ev.Precise, ev.Momentum, ev.Phase, ev.MomentumPhase, ev.ScrollDirection)
 	case platform.PointerZoom:
 		rt.pointerMove(x, y)
 		rt.zoom(float32(ev.Scale), float32(ev.Rotation), Modifiers(ev.Mods))
 	case platform.KeyPressed:
+		rt.hideEditMenu()
 		rt.modsChanged(Modifiers(ev.Mods))
 		rt.holdKey(Modifiers(ev.Mods), Key(ev.Key), Key(ev.PhysicalKey))
 		taken = rt.keyDownPhysical(Modifiers(ev.Mods), Key(ev.Key), Key(ev.PhysicalKey), KeyCode(ev.Code), ev.Repeat)
@@ -171,6 +173,7 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		rt.blinkStart = rt.now()
 		rt.focusChanged()
 	case platform.SurfaceBlur:
+		rt.hideEditMenu()
 		rt.windowFocused = false
 		rt.selection.dragging = false
 		// Keys let go of elsewhere never come back up here.
@@ -198,6 +201,8 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		rt.accessibilityOn()
 	case platform.AccessAction:
 		rt.accessAction(ev)
+	case platform.SurfaceTextInputEnded:
+		rt.textInputEnded()
 	}
 	if ev.Kind != platform.SurfaceFrame {
 		// A press or Tab may have moved the focus: tell the host now, not
@@ -604,7 +609,7 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks i
 		newFocus := uint64(0)
 		if focus != nil {
 			newFocus = focus.id
-			if rt.touch.down && focus.textClient != nil {
+			if rt.touch.down && focus.textClient != nil && !focus.textClientReadOnly() {
 				rt.ime.show++
 			}
 		}
@@ -613,6 +618,10 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks i
 			rt.focusVisible = false
 			rt.blinkStart = rt.now()
 		}
+	} else if button == 0 && keep && rt.touch.down && focus != nil && focus.id == rt.focused && focus.textClient != nil && !focus.textClientReadOnly() {
+		// Tapping the focused text input inside a KeepFocus container still
+		// asks to bring the on-screen keyboard back if it was hidden.
+		rt.ime.show++
 	}
 	h := rt.handler(chain)
 	clicks = rt.countPress(chain, target, h, max(clicks, 1))
@@ -1495,6 +1504,7 @@ func (rt *engine) register(r shortcutReg) bool {
 // editEvent delivers text, a composition or an edit command to the focus,
 // and reports whether an element took it.
 func (rt *engine) editEvent(ev editEvent) bool {
+	rt.hideEditMenu()
 	if rt.observers > 0 {
 		kind := InputText
 		if ev.kind == editCompose {
@@ -1504,7 +1514,7 @@ func (rt *engine) editEvent(ev editEvent) bool {
 		}
 		rt.observeFocus(InputEvent{Kind: kind, Text: ev.text, Caret: ev.caret})
 	}
-	if s := rt.states[rt.focused]; s != nil && s.textClient != nil && s.flags&flagDisabled == 0 && (s.editor == nil || !s.editor.readOnly) {
+	if s := rt.states[rt.focused]; s != nil && s.textClient != nil && s.flags&flagDisabled == 0 && !s.textClientReadOnly() {
 		if ev.kind == editInsert || (ev.kind == editCompose && rt.windowFocus()) {
 			var r *TextInputRange
 			if ev.replace {
@@ -1535,6 +1545,12 @@ func (rt *engine) editEvent(ev editEvent) bool {
 		}
 		if handled {
 			rt.blinkStart = rt.now()
+			if kind == InputCommand && ev.text == "selectAll" && rt.lastPointerTouch && h.textClient != nil {
+				rt.touchText.id = h.id
+				rt.touchText.scope = 0
+				rt.touchText.menuOpen = false
+				rt.showEditMenu(h)
+			}
 		} else {
 			rt.commandKey(ev, nil)
 		}
@@ -1554,6 +1570,12 @@ func (rt *engine) editEvent(ev editEvent) bool {
 		return true
 	}
 	if ev.kind == editCommand && rt.textSelectionCommand(s, ev.text) {
+		if ev.text == "selectAll" && rt.lastPointerTouch {
+			rt.touchText.id = s.id
+			rt.touchText.scope = s.textScope
+			rt.touchText.menuOpen = false
+			rt.showEditMenu(s)
+		}
 		rt.requestFrame()
 		return true
 	}
@@ -1592,6 +1614,18 @@ func (rt *engine) commandEnabled(name string) bool {
 	// As focusHandler, without windowFocus, which would have the next
 	// change of the window's focus draw a frame.
 	if s != nil && s.input != nil && s.editor == nil && rt.windowFocused {
+		if s.textClient != nil {
+			if s.flags&flagDisabled != 0 {
+				return false
+			}
+			if s.textClientReadOnly() && name != "copy" && name != "selectAll" {
+				return false
+			}
+			if name == "cut" || name == "copy" || name == "delete" {
+				r := s.textClient.Selection().Range
+				return r.Start != r.End
+			}
+		}
 		// Such an element tells what it does with a command only by
 		// doing it.
 		return true
@@ -1624,7 +1658,7 @@ const imeContext = 512
 func (rt *engine) updateTextInput() {
 	var t platform.TextInputState
 	base := 0
-	if s := rt.states[rt.focused]; s != nil && s.textClient != nil && rt.windowFocus() && s.flags&flagDisabled == 0 && (s.editor == nil || !s.editor.readOnly) {
+	if s := rt.states[rt.focused]; s != nil && s.textClient != nil && rt.windowFocus() && s.flags&flagDisabled == 0 && !s.textClientReadOnly() {
 		t.Active, t.Client, t.NoInputMethod = true, s.textAdapter, s.noIME
 		sel := s.textAdapter.Selection()
 		caret := sel.Caret()
@@ -1650,6 +1684,9 @@ func (rt *engine) updateTextInput() {
 		t.ShowKeyboard = rt.ime.show
 	}
 	if t != rt.ime.state {
+		if t.Client != rt.ime.state.Client || (!t.Active && rt.ime.state.Active) {
+			rt.hideEditMenu()
+		}
 		if t.Client != rt.ime.state.Client {
 			if old, ok := rt.ime.state.Client.(*textInputAdapter); ok {
 				old.release()

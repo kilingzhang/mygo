@@ -149,14 +149,25 @@ type touchPan struct {
 	// press gave the finger to the mouse's handling, to drag what it holds.
 	holds    uint64
 	dragging bool
+	// selecting says a long press chose a word on selectable or editable text
+	// and keeping the finger down extends the selection until it lifts.
+	selecting       bool
+	selectMoved     bool
+	scrollSelection bool
+	selectX0        float32
+	selectY0     float32
+	selectPts    [2]textPoint
+	selectRange  platform.TextRange
+	autoScrollAt time.Time
 	// edge says it swipes back from the screen's edge.
 	edge bool
 	// aimX and aimY are how far from the finger what it took is (aimTouch).
 	aimX, aimY float32
-	// textBefore is the input with the focus as it went down, and selBefore
-	// its selection then.
+	// textBefore is the input with the focus as it went down, selBefore its
+	// selection then, and menuBefore whether the system edit menu was open.
 	textBefore uint64
 	selBefore  platform.TextRange
+	menuBefore bool
 	// samples are its last positions, for its speed as it lifts.
 	samples [6]touchSample
 	n       int
@@ -182,11 +193,15 @@ func (rt *engine) touchEvent(ev platform.SurfaceEvent, x, y float32) bool {
 	t := &rt.touch
 	switch ev.Kind {
 	case platform.PointerDown:
-		*t = touchPan{down: true, x0: x, y0: y, lx: x, ly: y, at: rt.now(), aimX: t.aimX, aimY: t.aimY}
+		menuBefore := rt.touchText.menuOpen
+		rt.hideEditMenu()
+		*t = touchPan{down: true, x0: x, y0: y, lx: x, ly: y, at: rt.now(), aimX: t.aimX, aimY: t.aimY, menuBefore: menuBefore}
 		t.sample(rt.now(), x, y)
 		rt.catchBounces()
-		if h := rt.handleAt(x, y); h != handleNone {
+		if h, grabY := rt.handleAt(x, y); h != handleNone {
 			rt.touchText.held = h
+			rt.touchText.grabY = grabY
+			t.autoScrollAt = rt.now()
 			return true
 		}
 		t.textBefore = rt.focused
@@ -212,7 +227,19 @@ func (rt *engine) touchEvent(ev platform.SurfaceEvent, x, y float32) bool {
 			return false
 		}
 		if rt.touchText.held != handleNone {
+			t.lx, t.ly = x, y
 			rt.dragHandle(x, y)
+			return true
+		}
+		if t.selecting {
+			t.lx, t.ly = x, y
+			if !t.selectMoved && math.Hypot(float64(x-t.selectX0), float64(y-t.selectY0)) >= touchSelectDragSlop {
+				t.selectMoved = true
+				rt.hideEditMenu()
+			}
+			if t.selectMoved {
+				rt.dragLongPressSelection(t, x, y)
+			}
 			return true
 		}
 		if t.swallow {
@@ -232,7 +259,10 @@ func (rt *engine) touchEvent(ev platform.SurfaceEvent, x, y float32) bool {
 		if !t.panning {
 			dx, dy := x-t.x0, y-t.y0
 			if math.Hypot(float64(dx), float64(dy)) < touchSlop {
-				return t.waiting
+				if t.waiting || (rt.pressed != nil && (rt.selection.dragging || rt.pressed.textClient != nil || rt.pressed.flags&(flagEditable|flagSelectable) != 0)) {
+					return true
+				}
+				return false
 			}
 			t.holds = 0
 			axis := Vertical
@@ -251,6 +281,9 @@ func (rt *engine) touchEvent(ev platform.SurfaceEvent, x, y float32) bool {
 				return false
 			}
 			if rt.dragsPress(axis) {
+				if !t.waiting {
+					t.dragging = true
+				}
 				return t.waiting
 			}
 			t.panning = true
@@ -283,9 +316,14 @@ func (rt *engine) touchEvent(ev platform.SurfaceEvent, x, y float32) bool {
 		if rt.touchText.held != handleNone {
 			rt.touchText.held = handleNone
 			rt.touchSurface(func(s platform.TouchSurface) { s.HideMagnifier() })
-			if s := rt.states[rt.touchText.id]; s != nil {
-				rt.showEditMenu(s)
-			}
+			rt.showEditMenu(rt.states[rt.focused])
+			rt.requestFrame()
+			return true
+		}
+		if was.selecting {
+			t.selecting, t.selectMoved = false, false
+			rt.touchSurface(func(s platform.TouchSurface) { s.HideMagnifier() })
+			rt.showEditMenu(rt.states[rt.focused])
 			rt.requestFrame()
 			return true
 		}
@@ -349,7 +387,11 @@ const touchReach = 14
 func (rt *engine) aimTouch(kind platform.SurfaceEventKind, x, y float32) (float32, float32) {
 	t := &rt.touch
 	if kind == platform.PointerDown {
-		t.aimX, t.aimY = rt.nearestPressable(x, y)
+		if h, _ := rt.handleAt(x, y); h != handleNone {
+			t.aimX, t.aimY = 0, 0
+		} else {
+			t.aimX, t.aimY = rt.nearestPressable(x, y)
+		}
 	} else if !t.down && kind != platform.PointerUp {
 		t.aimX, t.aimY = 0, 0
 	}
@@ -391,8 +433,9 @@ func (rt *engine) cancelTouch() {
 	t := &rt.touch
 	was := *t
 	*t = touchPan{}
+	rt.hideEditMenu()
 	rt.releaseCaught(&was)
-	if rt.touchText.held != handleNone {
+	if rt.touchText.held != handleNone || was.selecting {
 		rt.touchText.held = handleNone
 		rt.touchSurface(func(s platform.TouchSurface) { s.HideMagnifier() })
 	}
@@ -419,14 +462,23 @@ func (rt *engine) releaseCaught(was *touchPan) {
 	rt.caught = rt.caught[:0]
 }
 
-// afterTap notes what a finger's tap did to a text input.
+// afterTap notes what a finger's tap did to a text input or selection.
 func (rt *engine) afterTap(was *touchPan) {
 	s := rt.states[rt.focused]
-	if s == nil || s.textAdapter == nil {
-		rt.touchText.id = 0
+	if s == nil {
+		rt.touchText.id, rt.touchText.scope = 0, 0
 		return
 	}
-	rt.textTapped(s, was.textBefore == rt.focused, was.selBefore)
+	if s.textAdapter == nil {
+		if s.textScope == 0 || rt.selection.scope != s.textScope {
+			rt.touchText.id, rt.touchText.scope = 0, 0
+		}
+		return
+	}
+	if rt.pressed != s {
+		return
+	}
+	rt.textTapped(s, was.textBefore == rt.focused, was.selBefore, was.menuBefore, was.x0, was.y0)
 }
 
 // overScroller reports whether a finger at x, y is on what scrolls, whose
@@ -440,7 +492,9 @@ func (rt *engine) overScroller(x, y float32) bool {
 			continue
 		}
 		if !scrolls && s.flags&(flagDraggable|flagTrackPointer) != 0 {
-			return false
+			if s.flags&flagTrackPointer != 0 || s.dragRec == nil || !s.dragRec.hasStart {
+				return false
+			}
 		}
 		if s.flags&flagScrollY != 0 && s.contentH > float64(s.h) || s.flags&flagScrollX != 0 && s.contentW > float64(s.w) {
 			scrolls = true
@@ -492,6 +546,9 @@ func (rt *engine) dragsPress(axis Orientation) bool {
 		if r := p.dragRec; r != nil && r.axes != 0 && r.axes&axis == 0 {
 			return false
 		}
+		if !p.dragAllowsPress() {
+			return false
+		}
 		return true
 	}
 	if p.flags&flagTrackPointer != 0 {
@@ -514,7 +571,7 @@ func (rt *engine) draggableAlong(x, y float32, axis Orientation) *state {
 		if s == nil {
 			continue
 		}
-		if s.flags&flagDraggable != 0 && s.dragRec != nil && s.dragRec.axes&axis != 0 && s.flags&flagDisabled == 0 {
+		if s.flags&flagDraggable != 0 && s.dragRec != nil && s.dragRec.axes&axis != 0 && s.flags&flagDisabled == 0 && s.dragAllowsStart(x, y) {
 			return s
 		}
 		if axis == Vertical && s.flags&flagScrollY != 0 && s.contentH > float64(s.h) || axis == Horizontal && s.flags&flagScrollX != 0 && s.contentW > float64(s.w) {
@@ -827,6 +884,7 @@ func (rt *engine) touchStep(now time.Time) {
 				rt.animating = true
 			}
 		}
+		rt.touchAutoScroll(now)
 	}
 	dt := float32(now.Sub(rt.bounceAt).Seconds())
 	rt.bounceAt = now
@@ -905,12 +963,16 @@ func (rt *engine) flingStep(now time.Time) {
 // still does something to: what asked (LongPressed), a context menu, what a
 // finger holds to drag, text it selects.
 func (rt *engine) longPressTarget(x, y float32) uint64 {
+	unselectable := false
 	for _, id := range rt.hitChain(x, y) {
 		s := rt.states[id]
 		if s == nil || s.flags&flagDisabled != 0 {
 			continue
 		}
-		if s.longPress || s.drags() || s.flags&(flagContextMenu|flagEditable|flagSelectable) != 0 {
+		if s.flags&flagUnselectable != 0 {
+			unselectable = true
+		}
+		if s.longPress || s.drags() || s.textClient != nil || s.flags&(flagContextMenu|flagEditable) != 0 || (!unselectable && s.flags&flagSelectable != 0) {
 			return id
 		}
 	}
@@ -938,8 +1000,8 @@ func (rt *engine) longPress(t *touchPan) {
 		// handling.
 		t.dragging = true
 		rt.pointerMove(x, y)
-	case s.flags&flagEditable != 0 || s.flags&flagSelectable != 0:
-		if s.flags&flagEditable == 0 {
+	case s.flags&flagEditable != 0 || s.flags&flagSelectable != 0 || s.textClient != nil:
+		if s.flags&flagEditable == 0 && s.textClient == nil {
 			// A custom menu on selectable content takes the hold. Passing
 			// the text through keeps EditItems available in the menu.
 			if menu := rt.touchContextMenu(rt.hitChain(x, y)); menu != nil {
@@ -952,15 +1014,22 @@ func (rt *engine) longPress(t *touchPan) {
 				return
 			}
 		}
-		// A word chosen, as a double click does.
+		// A word chosen, as a double click does; keeping the finger down drags
+		// to extend the selection until release, when the edit menu appears.
 		rt.cancelPress()
 		// As the second press of two on it, whatever it was pressed before.
 		rt.lastPress.prev, rt.lastPress.base = s.id, 0
 		rt.pointerDown(x, y, 0, rt.mods, 2)
 		rt.pointerUp(0, 2, false)
-		t.swallow = true
-		rt.touchText.id = s.id
-		rt.showEditMenu(s)
+		target := rt.states[rt.focused]
+		if target == nil {
+			target = s
+		}
+		rt.touchText.id = target.id
+		rt.touchText.scope = target.textScope
+		rt.touchText.caretAt = rt.now()
+		rt.initLongPressSelection(t, target, x, y)
+		rt.requestFrame()
 	default:
 		// The context menu, as the secondary button does.
 		rt.cancelPress()

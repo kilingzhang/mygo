@@ -659,26 +659,59 @@ func (t *Tester) HasText(s string) bool {
 // targetCenter checks the named element before sending any input. Labels
 // include clipped boxes, and a visible box may be covered by another control.
 func (t *Tester) targetCenter(s string, button int) (float32, float32, error) {
-	var firstErr error
+	var (
+		firstErr  error
+		hasChoice bool
+		fx, fy    float32
+	)
 	for i := range t.rt.labels {
 		n := &t.rt.labels[i]
 		if n.text != s {
 			continue
 		}
 		// A rich paragraph can have the same text as its only inline link.
-		// Check each named candidate against the actual input target.
+		// Check each named candidate against the actual input target, preferring
+		// a clickable/focusable control over a merely selectable container.
 		x, y, err := t.targetLabelCenter(n, button)
 		if err == nil {
-			return x, y, nil
+			if t.isDirectActionTarget(n, button) {
+				return x, y, nil
+			}
+			if !hasChoice {
+				fx, fy, hasChoice = x, y, true
+			}
+			continue
 		}
 		if firstErr == nil {
 			firstErr = err
 		}
 	}
+	if hasChoice {
+		return fx, fy, nil
+	}
 	if firstErr != nil {
 		return 0, 0, firstErr
 	}
 	return 0, 0, fmt.Errorf("ui: no element shows %q", s)
+}
+
+func (t *Tester) isDirectActionTarget(n *labelNode, button int) bool {
+	flags := uint32(interactive &^ flagSelectable)
+	if button == 1 {
+		flags |= flagContextMenu
+	}
+	for st := t.rt.states[n.id]; st != nil; st = t.rt.states[st.parent] {
+		if st.flags&flags != 0 || st.input != nil || st.webView != nil {
+			return true
+		}
+		if st.flags&flagSelectable != 0 {
+			return false
+		}
+		if st.parent == 0 {
+			break
+		}
+	}
+	return false
 }
 
 func (t *Tester) targetLabelCenter(n *labelNode, button int) (float32, float32, error) {

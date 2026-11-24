@@ -4,7 +4,7 @@
     "ios": {
       "sources": ["ios/*.swift"],
       "class": "ImagePickerPlugin",
-      "frameworks": ["PhotosUI", "Photos"],
+      "frameworks": ["PhotosUI", "Photos", "ImageIO"],
       "infoPlist": {"NSCameraUsageDescription": "This app takes photos with the camera."}
     },
     "android": {

@@ -84,18 +84,50 @@ type textInputAdapter struct {
 	id uint64
 }
 
-func (a *textInputAdapter) client() (TextInputClient, *state) {
-	// A non-key window can still receive text from system panels such as
-	// macOS's Character Viewer (Emoji & Symbols) while its view remains first
-	// responder, so do not require windowFocus() here.
+// readOnlyTextClient is optionally implemented by a TextInputClient (such as a
+// read-only code editor) that exposes selection and layout queries for touch
+// handles without activating an on-screen keyboard or accepting edits.
+type readOnlyTextClient interface {
+	ReadOnly() bool
+}
+
+func textClientReadOnly(c TextInputClient) bool {
+	if ro, ok := c.(readOnlyTextClient); ok {
+		return ro.ReadOnly()
+	}
+	return false
+}
+
+func (s *state) textClientReadOnly() bool {
+	if s == nil {
+		return false
+	}
+	if s.editor != nil && s.editor.readOnly {
+		return true
+	}
+	return textClientReadOnly(s.textClient)
+}
+
+func (a *textInputAdapter) readClient() (TextInputClient, *state) {
 	if a.rt.textInputClosed || a.rt.focused != a.id {
 		return nil, nil
 	}
 	s := a.rt.states[a.id]
-	if s == nil || s.textAdapter != a || s.textClient == nil || s.flags&flagDisabled != 0 || (s.editor != nil && s.editor.readOnly) {
+	if s == nil || s.textAdapter != a || s.textClient == nil || s.flags&flagDisabled != 0 {
 		return nil, nil
 	}
 	return s.textClient, s
+}
+
+func (a *textInputAdapter) client() (TextInputClient, *state) {
+	// A non-key window can still receive text from system panels such as
+	// macOS's Character Viewer (Emoji & Symbols) while its view remains first
+	// responder, so do not require windowFocus() here.
+	c, s := a.readClient()
+	if c == nil || s.textClientReadOnly() {
+		return nil, nil
+	}
+	return c, s
 }
 
 func (a *textInputAdapter) release() {
@@ -112,7 +144,7 @@ func (a *textInputAdapter) TextForRange(r platform.TextRange) (string, platform.
 	return "", platform.TextRange{}
 }
 func (a *textInputAdapter) Selection() platform.TextSelection {
-	if c, _ := a.client(); c != nil {
+	if c, _ := a.readClient(); c != nil {
 		s := c.Selection()
 		s.Range = platform.NormalizeTextRange(s.Range)
 		return s
@@ -137,17 +169,19 @@ func (a *textInputAdapter) ReplaceText(r *platform.TextRange, s string) {
 func (a *textInputAdapter) SetMarkedText(r *platform.TextRange, s string, selected platform.TextRange) {
 	if c, _ := a.client(); c != nil {
 		c.SetMarkedText(r, s, selected)
+		a.rt.textKeyed()
 		a.changed()
 	}
 }
 func (a *textInputAdapter) UnmarkText() {
 	if c, _ := a.client(); c != nil {
 		c.UnmarkText()
+		a.rt.hideEditMenu()
 		a.changed()
 	}
 }
 func (a *textInputAdapter) BoundsForRange(r platform.TextRange) (platform.RectF, platform.TextRange, bool) {
-	if c, s := a.client(); c != nil {
+	if c, s := a.readClient(); c != nil {
 		b, actual, ok := c.BoundsForRange(r)
 		b = transformRect(s.world, Rect{X: s.x + b.X, Y: s.y + b.Y, W: b.W, H: b.H})
 		// In the window's DIPs, as input methods take it.
@@ -156,7 +190,7 @@ func (a *textInputAdapter) BoundsForRange(r platform.TextRange) (platform.RectF,
 	return platform.RectF{}, platform.TextRange{}, false
 }
 func (a *textInputAdapter) IndexForPoint(x, y float64) (int, bool) {
-	if c, s := a.client(); c != nil {
+	if c, s := a.readClient(); c != nil {
 		if _, ok := s.world.Inverse(); !ok {
 			return 0, false
 		}
@@ -170,12 +204,13 @@ func (a *textInputAdapter) IndexForPoint(x, y float64) (int, bool) {
 // SetTextSelection moves the selection of a client that can, as an
 // on-screen keyboard's cursor does (platform.TextSelectionSetter).
 func (a *textInputAdapter) SetTextSelection(r platform.TextRange) {
-	c, _ := a.client()
+	c, _ := a.readClient()
 	if c == nil {
 		return
 	}
 	if set, ok := c.(TextInputSelectionSetter); ok {
 		set.SetTextSelection(platform.NormalizeTextRange(r))
+		a.rt.hideEditMenu()
 		a.changed()
 	}
 }

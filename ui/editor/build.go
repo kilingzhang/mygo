@@ -79,12 +79,10 @@ func (ed *editor) build(c *ui.Context, buf *Buffer, o options) ui.Element {
 		}
 		e.AccessChildren(ed.accessLinesFn)
 	}
-	if !o.readOnly {
-		e.HandleTextInput(ed).InputMethod(!o.noInputMethod)
-		if o.noInputMethod && ed.markedActive {
-			// Input methods turned off leave what they composed.
-			ed.UnmarkText()
-		}
+	e.HandleTextInput(ed).InputMethod(!o.noInputMethod && !o.readOnly)
+	if !o.readOnly && o.noInputMethod && ed.markedActive {
+		// Input methods turned off leave what they composed.
+		ed.UnmarkText()
 	}
 	e.HandleInput(ed.input)
 	// Cmd held or let go with the pointer still draws a frame, which

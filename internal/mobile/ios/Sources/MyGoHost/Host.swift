@@ -292,8 +292,7 @@ final class Host: NSObject, HostCalls, UNUserNotificationCenterDelegate, UIDocum
 
     func shareFile(_ c: ShareFileCall) {
         let vc = UIActivityViewController(activityItems: [URL(fileURLWithPath: c.path)], applicationActivities: nil)
-        vc.popoverPresentationController?.sourceView = root.view
-        vc.popoverPresentationController?.sourceRect = CGRect(x: root.view.bounds.midX, y: root.view.bounds.midY, width: 0, height: 0)
+        popover(vc, x: 0, y: 0)
         present(vc)
     }
 
@@ -506,7 +505,7 @@ final class Host: NSObject, HostCalls, UNUserNotificationCenterDelegate, UIDocum
 
     /// Where a sheet points on an iPad, which shows it as a popover.
     private func popover(_ vc: UIViewController, x: Double, y: Double) {
-        guard let p = vc.popoverPresentationController else { return }
+        guard UIDevice.current.userInterfaceIdiom == .pad, let p = vc.popoverPresentationController else { return }
         p.sourceView = root.view
         let at = x == 0 && y == 0 ? CGPoint(x: root.view.bounds.midX, y: root.view.bounds.midY) : CGPoint(x: x, y: y)
         p.sourceRect = CGRect(origin: at, size: .zero)

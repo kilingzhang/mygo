@@ -62,6 +62,9 @@ func (ed *editor) dispatch(ev ui.InputEvent) bool {
 		cmd := map[string]Command{"copy": Copy, "cut": Cut, "paste": Paste, "pasteAndMatchStyle": Paste, "selectAll": SelectAll,
 			"undo": Undo, "redo": Redo, "delete": Backspace}[ev.Text]
 		if cmd != NoCommand {
+			if ed.o.readOnly && commandEdits(cmd) {
+				return false
+			}
 			ed.run(cmd)
 			return true
 		}
@@ -942,6 +945,17 @@ func (ed *editor) BoundsForRange(r ui.TextInputRange) (ui.Rect, ui.TextInputRang
 		}
 	}
 	return ui.Rect{X: x, Y: y, W: w, H: cr.H}, r, true
+}
+
+func (ed *editor) ReadOnly() bool { return ed.o.readOnly }
+
+func (ed *editor) SetTextSelection(r ui.TextInputRange) {
+	ed.retry(func() bool {
+		t := &ed.view.text
+		a, z := t.FromUTF16(min(r.Start, r.End)), t.FromUTF16(max(r.Start, r.End))
+		ed.setSels([]sel{ed.newSel(a, z)}, revealNone)
+		return true
+	})
 }
 
 func (ed *editor) IndexForPoint(p ui.Point) (int, bool) {

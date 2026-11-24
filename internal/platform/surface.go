@@ -214,7 +214,7 @@ type TouchSurface interface {
 	Haptic(kind string)
 	// ShowEditMenu shows the system's menu of the editing commands named, of
 	// "cut", "copy", "paste" and "selectAll", at a point in DIPs; they come as
-	// SurfaceCommand.
+	// SurfaceCommand. An empty actions slice dismisses any open edit menu.
 	ShowEditMenu(x, y float64, actions []string)
 	// ShowMagnifier shows the system's magnifier of what is at a point in
 	// DIPs, as a finger drags a text handle, until HideMagnifier.
@@ -560,6 +560,10 @@ const (
 	// of StackSurface.SetStack, with its back button or a swipe: To is how
 	// many screens stay.
 	SurfaceStackPopped
+	// SurfaceTextInputEnded reports that the system ended text input on its
+	// own (for example, the user dismissed the iOS keyboard or a native view
+	// became first responder).
+	SurfaceTextInputEnded
 	// WebViewKey reports Key with Mods, pressed in the page of WebView,
 	// which has the keyboard, and which the page left unhandled: it did
 	// not cancel it, type it into an editable element or compose with it,

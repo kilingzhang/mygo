@@ -173,11 +173,21 @@ func (rt *engine) syncTextSelection() {
 	if rt.textPointIndex(rt.selection.anchor) < 0 || rt.textPointIndex(rt.selection.caret) < 0 {
 		// An endpoint was removed, hidden, disabled, or moved to another
 		// container. Never let a recycled state inherit the selection.
+		if rt.touchText.scope == rt.selection.scope {
+			rt.touchText.scope = 0
+		}
 		rt.selection = textSelection{}
 		return
 	}
 	if rt.selection.dragging && rt.pressed != nil {
 		rt.moveTextSelection(rt.pointerX, rt.pointerY)
+	} else if rt.touch.scrollSelection && rt.touch.down {
+		rt.touch.scrollSelection = false
+		if rt.touchText.held != handleNone {
+			rt.dragHandle(rt.touch.lx, rt.touch.ly)
+		} else if rt.touch.selecting && rt.touch.selectMoved {
+			rt.dragLongPressSelection(&rt.touch, rt.touch.lx, rt.touch.ly)
+		}
 	}
 	a, b, _ := rt.textSelectionBounds()
 	first, last := rt.textPointIndex(a), rt.textPointIndex(b)
@@ -458,7 +468,7 @@ type selectionStamp struct {
 func (rt *engine) notifyTextSelection() {
 	suppress := rt.suppressSelectionNotify
 	rt.suppressSelectionNotify = false
-	if rt.selection.dragging {
+	if rt.selection.dragging || rt.touchSelecting() {
 		return
 	}
 	scope := rt.selection.scope
