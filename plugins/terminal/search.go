@@ -150,10 +150,15 @@ func (f *search) drive(term *vt.Terminal) bool {
 			break
 		}
 	}
-	if f.pick && f.s.Total() > 0 {
-		if f.s.Select(false) {
-			f.pick = false
-			f.show(term)
+	if f.s.Total() > 0 {
+		_, selected := f.s.Selected()
+		if f.pick || !selected {
+			if f.s.Select(false) {
+				if f.pick {
+					f.pick = false
+					f.show(term)
+				}
+			}
 		}
 	}
 	f.update()

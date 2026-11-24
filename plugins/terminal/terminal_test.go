@@ -485,6 +485,39 @@ func TestSearch(t *testing.T) {
 	}
 }
 
+func TestSearchSurvivesResize(t *testing.T) {
+	loadLib(t)
+	var last SearchStatus
+	term, err := New(Options{Conn: newPipe(), OnSearch: func(s SearchStatus) { last = s }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer term.Close()
+	tt := ui.NewTester(func(c *ui.Context) { View(c, term).Fill().AutoFocus() }, 400, 200)
+	term.Feed([]byte("alpha needle one\r\nbeta needle two\r\n"))
+	tt.Frame()
+	term.Search("needle")
+	for range 100 {
+		if s := term.SearchStatus(); !s.Searching && s.Selected > 0 {
+			break
+		}
+		tt.Frame()
+	}
+	if s := term.SearchStatus(); s.Total != 2 || s.Selected == 0 || s.Searching {
+		t.Fatalf("before resize: %+v", s)
+	}
+	tt.SetSize(440, 200)
+	tt.Frame()
+	tt.Frame()
+	want := SearchStatus{Text: "needle", Total: 2, Selected: 1}
+	if s := term.SearchStatus(); s != want {
+		t.Fatalf("after resize: status = %+v, want %+v", s, want)
+	}
+	if last != want {
+		t.Fatalf("after resize: OnSearch = %+v, want %+v", last, want)
+	}
+}
+
 // A snapshot of a terminal no view shows restores what it shows in
 // another, as a server keeping sessions sends it to a window attaching.
 func TestSnapshot(t *testing.T) {
