@@ -81,11 +81,12 @@ func (t Text) Markdown() string {
 			b.WriteString(quote)
 		}
 		if st.Heading > 0 {
-			// A heading's closing #s are not its text: escape them.
+			// A heading's closing #s are not its text: escape them, unless
+			// a backslash already does, as before a heading of #s alone.
 			var h strings.Builder
 			writeMarkdownRuns(&h, p.Runs)
 			s := h.String()
-			if k := len(strings.TrimRight(s, "#")); k < len(s) {
+			if k := len(strings.TrimRight(s, "#")); k < len(s) && (k-len(strings.TrimRight(s[:k], "\\")))%2 == 0 {
 				s = s[:k] + "\\" + s[k:]
 			}
 			b.WriteString(s)
@@ -285,12 +286,19 @@ func renderRuns(runs []Run, html map[delimKey]bool) (string, []delim) {
 			continue
 		}
 		core := strings.TrimFunc(r.Text, unicode.IsSpace)
-		if core == "" {
+		lead, trail := "", ""
+		switch {
+		case r.Attributes.Code && r.Text != "":
+			// A code span keeps its spaces, at its ends too, and one of
+			// spaces alone.
+			core = r.Text
+		case core == "":
 			pending += r.Text
 			continue
+		default:
+			lead = r.Text[:strings.Index(r.Text, core)]
+			trail = r.Text[len(lead)+len(core):]
 		}
-		lead := r.Text[:strings.Index(r.Text, core)]
-		trail := r.Text[len(lead)+len(core):]
 		want := marksOf(r.Attributes)
 		k := 0
 		for k < len(open) && k < len(want) && open[k].mark == want[k] {
@@ -349,7 +357,7 @@ type runMarks struct {
 }
 
 // markScanner walks the runes of runs and the marks Markdown keeps for
-// each, skipping trailing spaces outside code.
+// each, skipping trailing spaces and tabs outside code.
 type markScanner struct {
 	runs []Run
 	ri   int
@@ -358,8 +366,8 @@ type markScanner struct {
 	cur  runMarks
 }
 
-// newMarkScanner counts the bytes of runs, less the trailing spaces outside
-// code that Markdown does not keep.
+// newMarkScanner counts the bytes of runs, less the trailing spaces and
+// tabs outside code that Markdown does not keep.
 func newMarkScanner(runs []Run) markScanner {
 	rem := 0
 	for _, r := range runs {
@@ -374,7 +382,7 @@ func newMarkScanner(runs []Run) markScanner {
 			break
 		}
 		j := len(text)
-		for j > 0 && text[j-1] == ' ' {
+		for j > 0 && (text[j-1] == ' ' || text[j-1] == '\t') {
 			j--
 			rem--
 		}
@@ -446,7 +454,11 @@ func codeSpan(s string) string {
 		}
 	}
 	fence := strings.Repeat("`", longest+1)
-	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") {
+	// A space on each side, which Markdown takes off: beside a backtick,
+	// and around a span that has its own on both sides, but for one of
+	// spaces alone, which it keeps.
+	spaced := strings.HasPrefix(s, " ") && strings.HasSuffix(s, " ") && strings.Trim(s, " ") != ""
+	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") || spaced {
 		s = " " + s + " "
 	}
 	return fence + s + fence

@@ -7,6 +7,7 @@ import (
 	"image"
 	"math"
 	"os"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -95,7 +96,10 @@ func TestPerformKeyEquivalent(key string, shift bool) bool {
 	withPool(func() {
 		flags := uint(1 << 20)
 		if shift {
+			// The characters of a shifted press are shifted, as AppKit
+			// gives them.
 			flags |= 1 << 17
+			key = strings.ToUpper(key)
 		}
 		ev := msgKeyEvent(class("NSEvent"), sel("keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:"),
 			10 /* NSEventTypeKeyDown */, NSPoint{}, flags, 0, 0, 0, nsString(key), nsString(key), false, 0)
@@ -1933,4 +1937,31 @@ func TestDrawablesTrimmed(handle uintptr) (trimmed, ok bool) {
 	}
 	size := msgSize(l, sel("drawableSize"))
 	return size.Width <= 1 && size.Height <= 1, true
+}
+
+// TestStatusItemPosition reports the place in the menu bar that macOS keeps
+// in the app's defaults for the tray icon named name, where the user last
+// dragged it with ⌘.
+func TestStatusItemPosition(name string) (pos int, ok bool) {
+	withPool(func() {
+		v := send(send(class("NSUserDefaults"), "standardUserDefaults"), "objectForKey:", uintptr(nsString("NSStatusItem Preferred Position "+name)))
+		if v != 0 {
+			pos, ok = sendInt(v, "integerValue"), true
+		}
+	})
+	return pos, ok
+}
+
+// TestSetStatusItemPosition sets the place TestStatusItemPosition reports,
+// as a drag with ⌘ does, or removes it when pos is negative.
+func TestSetStatusItemPosition(name string, pos int) {
+	withPool(func() {
+		defaults := send(class("NSUserDefaults"), "standardUserDefaults")
+		key := nsString("NSStatusItem Preferred Position " + name)
+		if pos < 0 {
+			send(defaults, "removeObjectForKey:", uintptr(key))
+			return
+		}
+		send(defaults, "setObject:forKey:", uintptr(nsNumberInt(pos)), uintptr(key))
+	})
 }

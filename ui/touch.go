@@ -155,10 +155,10 @@ type touchPan struct {
 	selectMoved     bool
 	scrollSelection bool
 	selectX0        float32
-	selectY0     float32
-	selectPts    [2]textPoint
-	selectRange  platform.TextRange
-	autoScrollAt time.Time
+	selectY0        float32
+	selectPts       [2]textPoint
+	selectRange     platform.TextRange
+	autoScrollAt    time.Time
 	// edge says it swipes back from the screen's edge.
 	edge bool
 	// aimX and aimY are how far from the finger what it took is (aimTouch).
@@ -167,6 +167,8 @@ type touchPan struct {
 	// selection then, and menuBefore whether the system edit menu was open.
 	textBefore uint64
 	selBefore  platform.TextRange
+	// menuBefore is whether the system's edit menu showed as it went down,
+	// which its landing hid.
 	menuBefore bool
 	// samples are its last positions, for its speed as it lifts.
 	samples [6]touchSample
@@ -193,11 +195,13 @@ func (rt *engine) touchEvent(ev platform.SurfaceEvent, x, y float32) bool {
 	t := &rt.touch
 	switch ev.Kind {
 	case platform.PointerDown:
-		menuBefore := rt.touchText.menuOpen
-		rt.hideEditMenu()
-		*t = touchPan{down: true, x0: x, y0: y, lx: x, ly: y, at: rt.now(), aimX: t.aimX, aimY: t.aimY, menuBefore: menuBefore}
+		*t = touchPan{down: true, x0: x, y0: y, lx: x, ly: y, at: rt.now(), aimX: t.aimX, aimY: t.aimY}
 		t.sample(rt.now(), x, y)
 		rt.catchBounces()
+		// The edit menu goes as a finger lands anywhere but on it, which
+		// takes its own touches; a hold or a handle let go brings it back.
+		t.menuBefore = rt.touchText.menu
+		rt.hideEditMenu()
 		if h, grabY := rt.handleAt(x, y); h != handleNone {
 			rt.touchText.held = h
 			rt.touchText.grabY = grabY
@@ -1078,6 +1082,7 @@ func (rt *engine) systemEvent(ev platform.SurfaceEvent) {
 // touchOver draws what fingers have over the frame, and tells the system
 // what the frame takes.
 func (rt *engine) touchOver(p *Painter) {
+	rt.editMenuLeft()
 	rt.paintHandles(p)
 	rt.tellBack()
 }

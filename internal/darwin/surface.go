@@ -159,6 +159,7 @@ type surface struct {
 	framePass uint64
 	cursor    platform.Cursor
 	inside    bool
+	swipe     swipeTrack
 	// secondaryClick is set while the primary button is down for a secondary
 	// click: a Control-click, or a press of the secondary button that an event
 	// tap posted again as a primary one.
@@ -885,13 +886,21 @@ func scrollWheel(s *surface, ev id) {
 	if sendBool(ev, "isDirectionInvertedFromDevice") {
 		dir = platform.ScrollDirectionNatural
 	}
+	// The raw NSEventPhase of a touchpad's gesture, which a swipe between
+	// pages follows; 0 for a mouse's wheel and the momentum after a gesture.
+	rawPhase := 0
+	if precise && !momentum {
+		rawPhase = sendInt(ev, "phase")
+	}
+	swipe := s.swipe.swiping(rawPhase)
 	if !precise {
 		// Non-precise mouse wheel deltas are in lines; multiply by a standard
 		// macOS line height (20 DIPs) instead of browser 40px so wheel speed
 		// matches native AppKit scroll views under macOS HID acceleration.
 		dx, dy = dx*20, dy*20
 	}
-	s.send(platform.SurfaceEvent{
+	mods := eventMods(ev)
+	taken := s.send(platform.SurfaceEvent{
 		Kind:            platform.PointerScroll,
 		X:               x,
 		Y:               y,
@@ -899,11 +908,21 @@ func scrollWheel(s *surface, ev id) {
 		DY:              -dy,
 		Precise:         precise,
 		Momentum:        momentum,
+		Swipe:           swipe,
 		Phase:           phase,
 		MomentumPhase:   momentumPhase,
 		ScrollDirection: dir,
-		Mods:            eventMods(ev),
+		Mods:            mods,
 	})
+	if !swipe {
+		return
+	}
+	// A two-finger swipe nothing scrolled sideways goes back or forward,
+	// as the side buttons do.
+	if back, ok := s.swipe.scroll(rawPhase, dx, dy, taken); ok {
+		s.sideButton(platform.PointerDown, back, mods)
+		s.sideButton(platform.PointerUp, back, mods)
+	}
 }
 
 func eventMods(ev id) platform.Modifiers {

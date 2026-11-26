@@ -64,9 +64,11 @@ type touchText struct {
 	// grabY offsets the finger's Y toward the vertical center of the line the
 	// grabbed handle sits on so touching a top or bottom knob never jumps lines.
 	grabY float32
-	// menuOpen reports whether the system's edit menu was last shown and has
-	// not yet been dismissed.
-	menuOpen bool
+	// menu is whether the system's edit menu shows, which menuFocus had
+	// the focus as it came: it goes as a finger lands, keys type, or the
+	// focus leaves what it was for, as Android's TextView has it.
+	menu      bool
+	menuFocus uint64
 }
 
 // touchSelHandles describes the current selection handle geometry in content
@@ -735,13 +737,13 @@ func (rt *engine) touchSurfaceOf() platform.TouchSurface {
 	return nil
 }
 
-// hideEditMenu dismisses the system's edit menu when it is open.
+// hideEditMenu takes the system's edit menu away, where it shows.
 func (rt *engine) hideEditMenu() {
-	if !rt.touchText.menuOpen {
+	if !rt.touchText.menu {
 		return
 	}
-	rt.touchText.menuOpen = false
-	rt.touchSurface(func(ts platform.TouchSurface) { ts.ShowEditMenu(0, 0, nil) })
+	rt.touchText.menu = false
+	rt.touchSurface(func(ts platform.TouchSurface) { ts.HideEditMenu() })
 }
 
 // showEditMenu shows the system's menu of editing commands over the
@@ -793,19 +795,34 @@ func (rt *engine) showEditMenu(s *state) {
 		cx, cy = r.X+r.W/2, r.Y
 	}
 	wx, wy := rt.windowPoint(cx, cy)
-	rt.touchText.menuOpen = true
-	rt.touchSurface(func(ts platform.TouchSurface) { ts.ShowEditMenu(wx, wy, actions) })
+	rt.touchSurface(func(ts platform.TouchSurface) {
+		ts.ShowEditMenu(wx, wy, actions)
+		rt.touchText.menu, rt.touchText.menuFocus = true, rt.focused
+	})
+}
+
+// editMenuLeft hides the system's edit menu once what it was for has the
+// focus no more, or the frame built it no more, as a dialog holding it
+// closed (#2249).
+func (rt *engine) editMenuLeft() {
+	t := &rt.touchText
+	if !t.menu {
+		return
+	}
+	if s := rt.states[t.id]; s == nil || s.seen != rt.frame || s.pass != rt.pass || rt.focused != t.menuFocus {
+		rt.hideEditMenu()
+	}
 }
 
 // textTapped notes a finger's tap on the text input s, which it placed the
 // caret of: tapped again on the caret while the menu is closed, the menu
 // shows what can be done there; tapped while it is open, it stays closed.
-func (rt *engine) textTapped(s *state, focused bool, sel platform.TextRange, menuBefore bool, x, y float32) {
+func (rt *engine) textTapped(s *state, focused bool, sel platform.TextRange, menu bool, x, y float32) {
 	t := &rt.touchText
 	t.id = s.id
 	t.scope = 0
 	t.caretAt = rt.now()
-	if menuBefore || !focused || s.textAdapter == nil || s.textClientReadOnly() {
+	if menu || !focused || s.textAdapter == nil || s.textClientReadOnly() {
 		return
 	}
 	cur := s.textAdapter.Selection().Range
@@ -824,7 +841,8 @@ func (rt *engine) textTapped(s *state, focused bool, sel platform.TextRange, men
 	rt.showEditMenu(s)
 }
 
-// textKeyed hides the handles and edit menu as keys type: what they point at moved.
+// textKeyed hides the handles and the edit menu as keys type: what they
+// point at moved.
 func (rt *engine) textKeyed() {
 	rt.touchText.caretAt = time.Time{}
 	rt.hideEditMenu()

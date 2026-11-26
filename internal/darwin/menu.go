@@ -1480,6 +1480,13 @@ func keyEquivalent(acc string) (string, uint) {
 		mods |= 1 << 17
 	}
 	if len(a.Key) == 1 {
+		// AppKit matches a lower case letter with Shift in the mask to the
+		// press without Shift too: Command-W would choose an item of
+		// Shift-Command-W. The upper case letter, as Shift types it, matches
+		// the shifted press alone.
+		if k := a.Key[0]; a.Has(accelerator.Shift) && k >= 'a' && k <= 'z' {
+			return string(k - 'a' + 'A'), mods
+		}
 		return a.Key, mods
 	}
 	named := map[string]rune{
@@ -1508,6 +1515,9 @@ type tray struct {
 	item   id
 	button id
 	owner  int
+	// autosave is the item's autosave name (SetID), under which macOS
+	// keeps its place in the menu bar.
+	autosave string
 	// dark is the menu bar's appearance, as last told.
 	dark bool
 	// mono draws the title in the monospaced font (SetTitleMonospaced).
@@ -1604,8 +1614,9 @@ func (t *tray) Dark() bool {
 
 // SetID gives the status item an autosave name: macOS keeps under it where
 // the user dragged the item with ⌘, and puts it there as it is made again.
-func (t *tray) SetID(id string) {
-	withPool(func() { send(t.item, "setAutosaveName:", uintptr(nsString(id))) })
+func (t *tray) SetID(name string) {
+	t.autosave = name
+	withPool(func() { send(t.item, "setAutosaveName:", uintptr(nsString(name))) })
 }
 
 func (t *tray) SetImage(png []byte, template bool) error {
@@ -1767,9 +1778,30 @@ func (t *tray) Destroy() {
 		return
 	}
 	delete(t.b.trays, t.button)
-	send(t.button, "removeObserver:forKeyPath:", uintptr(trayTarget), uintptr(nsString("effectiveAppearance")))
-	dropOwner(t.owner)
-	send(send(class("NSStatusBar"), "systemStatusBar"), "removeStatusItem:", uintptr(t.item))
-	release(t.item)
+	// Removing a status item deletes the place the user dragged it to with
+	// ⌘ ("NSStatusItem Preferred Position <name>" in the app's defaults),
+	// and freeing it deletes it again: an app that removes its icon as it
+	// quits would find it back at the left. Keep the place and put it back
+	// once the item is gone.
+	var key, pos id
+	withPool(func() {
+		if t.autosave != "" {
+			key = retain(nsString("NSStatusItem Preferred Position " + t.autosave))
+			pos = retain(send(send(class("NSUserDefaults"), "standardUserDefaults"), "objectForKey:", uintptr(key)))
+		}
+		send(t.button, "removeObserver:forKeyPath:", uintptr(trayTarget), uintptr(nsString("effectiveAppearance")))
+		dropOwner(t.owner)
+		send(send(class("NSStatusBar"), "systemStatusBar"), "removeStatusItem:", uintptr(t.item))
+		release(t.item)
+	})
 	t.item = 0
+	if pos != 0 {
+		withPool(func() {
+			send(send(class("NSUserDefaults"), "standardUserDefaults"), "setObject:forKey:", uintptr(pos), uintptr(key))
+		})
+		release(pos)
+	}
+	if key != 0 {
+		release(key)
+	}
 }

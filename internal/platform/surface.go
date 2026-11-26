@@ -216,6 +216,9 @@ type TouchSurface interface {
 	// "cut", "copy", "paste" and "selectAll", at a point in DIPs; they come as
 	// SurfaceCommand. An empty actions slice dismisses any open edit menu.
 	ShowEditMenu(x, y float64, actions []string)
+	// HideEditMenu takes the menu of ShowEditMenu away, as what it was
+	// for loses the focus or a finger lands elsewhere.
+	HideEditMenu()
 	// ShowMagnifier shows the system's magnifier of what is at a point in
 	// DIPs, as a finger drags a text handle, until HideMagnifier.
 	ShowMagnifier(x, y float64)
@@ -619,8 +622,12 @@ type SurfaceEvent struct {
 	// Phase and MomentumPhase carry OS gesture boundaries (ScrollPhase).
 	// ScrollDirection reports whether DX/DY follow natural or traditional
 	// direction when known (e.g. macOS NSEvent.isDirectionInvertedFromDevice).
+	// Swipe marks a touchpad's scroll that may be a swipe between pages
+	// (macOS): the content then reports whether it took the scroll
+	// sideways, for the swipe goes on where it did not.
 	DX, DY               float64
 	Precise, Momentum    bool
+	Swipe                bool
 	Phase, MomentumPhase ScrollPhase
 	ScrollDirection      ScrollDirection
 	// Scale is PointerZoom's, and Rotation the radians clockwise two fingers

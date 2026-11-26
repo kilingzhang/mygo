@@ -217,16 +217,19 @@ func (rt *engine) chainScrollAxes(chain []uint64) (hasX, hasY bool) {
 
 // filterScrollAxes keeps only the deltas s should consider along its enabled
 // axes, skipping orthogonal single-axis containers when the opposite axis
-// dominates the gesture.
-func filterScrollAxes(s *state, sx, sy float32, hasAncX, hasAncY bool) (fx, fy float32, ok bool) {
+// dominates the gesture. strict skips them even when nothing else can scroll
+// that way, as a trackpad's jitter must not scroll the other axis; a swipe
+// between pages is not strict, its few DIPs along the other axis scrolling
+// what it crossed.
+func filterScrollAxes(s *state, sx, sy float32, hasAncX, hasAncY, strict bool) (fx, fy float32, ok bool) {
 	if s == nil || s.flags&(flagScrollX|flagScrollY) == 0 {
 		return 0, 0, false
 	}
 	ax, ay := abs32(sx), abs32(sy)
-	if ay > ax && s.flags&flagScrollY == 0 && (hasAncY || ay > ax*1.25) {
+	if ay > ax && s.flags&flagScrollY == 0 && (hasAncY || strict && ay > ax*1.25) {
 		return 0, 0, false
 	}
-	if ax > ay && s.flags&flagScrollX == 0 && (hasAncX || ax > ay*1.25) {
+	if ax > ay && s.flags&flagScrollX == 0 && (hasAncX || strict && ax > ay*1.25) {
 		return 0, 0, false
 	}
 	if s.flags&flagScrollX != 0 {
@@ -302,7 +305,7 @@ func (tp *trackpadScroll) pickTarget(rt *engine, chain []uint64, dx, dy float32,
 			if sideways && s.rtl {
 				sx = -sx
 			}
-			if _, _, ok := filterScrollAxes(s, sx, sy, hasX, hasY); ok {
+			if _, _, ok := filterScrollAxes(s, sx, sy, hasX, hasY, true); ok {
 				return tp.caughtID
 			}
 		}
@@ -317,7 +320,7 @@ func (tp *trackpadScroll) pickTarget(rt *engine, chain []uint64, dx, dy float32,
 		if sideways && s.rtl {
 			sx = -sx
 		}
-		fx, fy, ok := filterScrollAxes(s, sx, sy, hasX, hasY)
+		fx, fy, ok := filterScrollAxes(s, sx, sy, hasX, hasY, true)
 		if ok && canMoveScrollOrUnwind(s, fx, fy) {
 			return id
 		}
@@ -334,7 +337,7 @@ func (tp *trackpadScroll) pickTarget(rt *engine, chain []uint64, dx, dy float32,
 		if sideways && s.rtl {
 			sx = -sx
 		}
-		fx, fy, ok := filterScrollAxes(s, sx, sy, hasX, hasY)
+		fx, fy, ok := filterScrollAxes(s, sx, sy, hasX, hasY, true)
 		if ok && canTrackpadOverscroll(s, fx, fy) {
 			return id
 		}
