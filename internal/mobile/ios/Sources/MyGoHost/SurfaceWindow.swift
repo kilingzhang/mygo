@@ -709,7 +709,7 @@ final class SurfaceWindow: HostWindow, UITextInput, UIPointerInteractionDelegate
         }
     }
 
-    func hideMenu() { editMenu.dismissMenu() }
+    func hideMenu() { dismissEditMenu() }
 
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         switch action {
